@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#2f6b4f" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#16241d" media="(prefers-color-scheme: dark)">
+  <meta name="description" content="Carta de almuerzos con mínimos semanales">
+  <title>Carta de comidas</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon-192.png" type="image/png">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <h1 id="title">Hoy</h1>
+  </header>
+
+  <main>
+    <!-- Today: the lunch of the selected day and weekly progress -->
+    <section id="view-hoy" class="view" aria-labelledby="title">
+      <div class="daynav">
+        <button class="icon-btn" id="prev-day" aria-label="Día anterior">&#8249;</button>
+        <div class="daynav-label">
+          <span id="day-label"></span>
+          <button class="link-btn" id="go-today" hidden>Volver a hoy</button>
+        </div>
+        <button class="icon-btn" id="next-day" aria-label="Día siguiente">&#8250;</button>
+      </div>
+
+      <div class="card">
+        <h2 class="card-title">Esta semana</h2>
+        <div id="progress" class="progress"></div>
+      </div>
+
+      <div class="card">
+        <h2 class="card-title">Almuerzo</h2>
+        <div id="slot" class="slot"></div>
+        <div id="slot-actions" class="actions"></div>
+      </div>
+    </section>
+
+    <!-- Menu: dish catalogue grouped by section -->
+    <section id="view-carta" class="view" hidden>
+      <button class="btn primary block" id="add-dish">Añadir plato</button>
+      <div id="menu-list"></div>
+    </section>
+
+    <!-- Week: Monday to Sunday overview, goals and backup -->
+    <section id="view-semana" class="view" hidden>
+      <div class="daynav">
+        <button class="icon-btn" id="prev-week" aria-label="Semana anterior">&#8249;</button>
+        <div class="daynav-label"><span id="week-label"></span></div>
+        <button class="icon-btn" id="next-week" aria-label="Semana siguiente">&#8250;</button>
+      </div>
+      <ul id="week-list" class="week-list"></ul>
+
+      <div class="card">
+        <h2 class="card-title">Objetivos semanales</h2>
+        <div id="goals"></div>
+      </div>
+
+      <div class="card">
+        <h2 class="card-title">Copia de seguridad</h2>
+        <div class="actions">
+          <button class="btn" id="export-btn">Exportar</button>
+          <label class="btn" for="import-file">Importar</label>
+          <input type="file" id="import-file" accept="application/json,.json" hidden>
+        </div>
+        <p id="backup-msg" class="hint" role="status"></p>
+      </div>
+
+      <button class="btn primary block" id="install-btn" hidden>Instalar la app</button>
+    </section>
+  </main>
+
+  <!-- Bottom sheet used for picking and editing dishes (in-page panel, no native dialogs) -->
+  <div id="sheet-backdrop" class="backdrop" hidden></div>
+  <section id="sheet" class="sheet" hidden aria-modal="true" role="dialog" aria-labelledby="sheet-title">
+    <div class="sheet-head">
+      <h2 id="sheet-title"></h2>
+      <button class="icon-btn" id="sheet-close" aria-label="Cerrar">&times;</button>
+    </div>
+    <div id="sheet-body" class="sheet-body"></div>
+  </section>
+
+  <nav class="tabbar" aria-label="Secciones">
+    <button class="tab active" data-view="hoy">Hoy</button>
+    <button class="tab" data-view="carta">Carta</button>
+    <button class="tab" data-view="semana">Semana</button>
+  </nav>
+
+  <script src="app.js"></script>
+</body>
+</html>
