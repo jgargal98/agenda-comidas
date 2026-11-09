@@ -4,7 +4,7 @@
  * Storage and data model
  *
  * state = {
- *   version: 7,
+ *   version: 8,
  *   counters: [{ id, label, type: 'min' | 'max', target }],  // per week
  *   dishes:   [{ id, section, name, counts: [counterId] }],
  *   log:      { 'YYYY-MM-DD': { primero: Slot | null, segundo: Slot | null } }
@@ -18,7 +18,7 @@
  * ------------------------------------------------------------------ */
 
 const STORAGE_KEY = 'carta-comidas:v1';
-const STATE_VERSION = 7;
+const STATE_VERSION = 8;
 const RECENT_DAYS = 3;
 const MAX_TARGET = 7;
 
@@ -58,7 +58,7 @@ const NEW_SECTION = '__new__';
 const SEED_DISHES = [
   ['Legumbres', 'Lentejas', ['legumbres']],
   ['Legumbres', 'Ensalada de garbanzos', ['legumbres', 'verdura']],
-  ['Guisos', 'Puchero con arroz', ['refinados']],
+  ['Guisos', 'Puchero con arroz', []],
   ['Pasta', 'Pasta', ['refinados'], true],
   ['Pasta', 'Carbonara', ['procesado']],
   ['Pasta', 'Boloñesa', ['roja']],
@@ -72,7 +72,7 @@ const SEED_DISHES = [
   ['Carne y pescado', 'Pavo', [], true],
   ['Carne y pescado', 'Ternera', ['roja'], true],
   ['Carne y pescado', 'Cerdo', ['roja'], true],
-  ['Carne y pescado', 'Gambas', [], true],
+  ['Carne y pescado', 'Gambas', ['pescado'], true],
   ['Verdura y cremas', 'Patatas', [], true],
   ['Verdura y cremas', 'Ensalada', [], true],
   ['Verdura y cremas', 'Crema de calabacín', ['verdura'], true],
@@ -120,7 +120,6 @@ const V7_DISH_COUNTERS = {
   'salmón': ['azul'],
   'carbonara': ['procesado'],
   'empanados': ['frito'],
-  'puchero con arroz': ['refinados'],
   'pasta': ['refinados'],
   'ensalada de pasta': ['refinados'],
   'noodles': ['refinados'],
@@ -254,6 +253,23 @@ function migrateToV7(raw) {
   return { ...raw, version: 7, counters, dishes };
 }
 
+// Shellfish counts as fish, and the rice in a stew is not its main ingredient.
+// Counters are found by name too, since the user may have created their own.
+function migrateToV8(raw) {
+  const findCounter = (id, label) => raw.counters.find((c) => c?.id === id || (typeof c?.label === 'string' && c.label.trim().toLowerCase() === label));
+  const fishId = findCounter('pescado', 'pescado')?.id;
+  const refinedId = findCounter('refinados', 'hidratos refinados')?.id;
+
+  const dishes = raw.dishes.map((d) => {
+    const low = typeof d?.name === 'string' ? d.name.trim().toLowerCase() : '';
+    const own = Array.isArray(d?.counts) ? d.counts : [];
+    if (low === 'gambas' && fishId) return { ...d, counts: [...new Set([...own, fishId])] };
+    if (low === 'puchero con arroz') return { ...d, counts: own.filter((id) => id !== refinedId) };
+    return d;
+  });
+  return { ...raw, version: 8, dishes };
+}
+
 const clampTarget = (value, fallback) => {
   const n = Number(value);
   return Number.isInteger(n) && n >= 0 && n <= MAX_TARGET ? n : fallback;
@@ -267,7 +283,8 @@ function normalizeState(input) {
   const upgraded = Array.isArray(input.counters) ? input : migrateV1(input);
   const atV4 = (Number(upgraded.version) || 1) < 4 ? migrateToV4(upgraded) : upgraded;
   const atV6 = Number(atV4.version) < 6 ? migrateToV6(atV4) : atV4;
-  const raw = Number(atV6.version) < 7 ? migrateToV7(atV6) : atV6;
+  const atV7 = Number(atV6.version) < 7 ? migrateToV7(atV6) : atV6;
+  const raw = Number(atV7.version) < 8 ? migrateToV8(atV7) : atV7;
 
   const seen = new Set();
   const counters = [];
