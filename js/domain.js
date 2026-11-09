@@ -12,7 +12,7 @@ export const COURSES = [
 
 // Display order of sections in the menu; unknown sections go last.
 export const SECTION_ORDER = [
-  'Legumbres', 'Guisos', 'Hidratos', 'Carne y pescado',
+  'Legumbres', 'Guisos', 'Hidratos', 'Salsas', 'Carne y pescado',
   'Verdura y cremas', 'Frío', 'Huevo', 'Precocinado',
 ];
 
