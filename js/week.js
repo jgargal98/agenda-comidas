@@ -2,8 +2,7 @@
 
 import { addDays, cap, fmtDow, fmtShort, fromKey, todayKey, weekDays } from './dates.js';
 import { daySlots, orderedCounters } from './domain.js';
-import { uid } from './seed.js';
-import { save, state } from './state.js';
+import { save, state, uid } from './state.js';
 import { renderSync } from './sync.js';
 import { $, closeSheet, deleteButton, h, openSheet, render, showView, ui } from './ui.js';
 

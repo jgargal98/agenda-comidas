@@ -9,8 +9,7 @@
  */
 
 import { fmtStamp } from './dates.js';
-import { STATE_VERSION } from './seed.js';
-import { normalizeState, persist, setOnSave, setState, state } from './state.js';
+import { isStateEmpty, normalizeState, persist, setOnSave, setState, state } from './state.js';
 import { $, closeSheet, h, isSheetOpen, openSheet, render, setOnSheetClose, ui } from './ui.js';
 
 const SYNC_META_KEY = 'carta-comidas:sync';
@@ -95,9 +94,6 @@ async function upload(baseRevision) {
   if (meta.dirty) scheduleSync();
 }
 
-// True when the server still holds data in an older format than this app's.
-const isOutdated = (remote) => remote.data && (Number(remote.data.version) || 1) < STATE_VERSION;
-
 function adopt(remote) {
   let incoming;
   try {
@@ -112,7 +108,6 @@ function adopt(remote) {
   meta.dirty = false;
   markSynced(remote.revision);
   render();
-  if (isOutdated(remote)) scheduleSync(0);
 }
 
 // Keeps the version the user is about to discard, in case it was the wrong choice.
@@ -175,21 +170,22 @@ async function syncOnce() {
     rerun = true;
     return;
   }
-  // An older copy of the app must not rewrite data it does not fully understand
-  if (Number(remote.data?.version) > STATE_VERSION) {
-    setStatus('Otro dispositivo usa una versión más nueva. Vuelve a abrir la app para actualizarla.');
-    return;
-  }
   // The sheet may have been opened during the request
   if (isSheetOpen()) {
     deferred = true;
     return;
   }
+  // An empty device has nothing to lose or to offer: it never uploads, so it can
+  // not wipe the server, and it takes the server's data without asking
+  if (isStateEmpty() && !meta.dirty) {
+    if (remote.revision > 0) adopt(remote);
+    else setStatus('Conectado. Todavía no hay datos.');
+    return;
+  }
 
   if (remote.revision === 0) await upload(0);
   else if (remote.revision === meta.revision) {
-    // This device already holds that data converted, so uploading loses nothing
-    if (meta.dirty || isOutdated(remote)) await upload(remote.revision);
+    if (meta.dirty) await upload(remote.revision);
     else markSynced(remote.revision);
   } else if (meta.dirty || meta.revision === 0) openConflict(remote);
   else adopt(remote);

@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump this on every release so old caches are dropped.
-const CACHE = 'carta-comidas-v14';
+const CACHE = 'carta-comidas-v15';
 const ASSETS = [
   './',
   'index.html',
@@ -11,8 +11,6 @@ const ASSETS = [
   'js/dates.js',
   'js/domain.js',
   'js/menu.js',
-  'js/migrations.js',
-  'js/seed.js',
   'js/state.js',
   'js/sync.js',
   'js/today.js',

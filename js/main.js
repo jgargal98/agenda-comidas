@@ -3,7 +3,6 @@
 import './backup.js';
 import { todayKey } from './dates.js';
 import { renderMenu } from './menu.js';
-import { persist } from './state.js';
 import { runSync, scheduleSync } from './sync.js';
 import { renderToday } from './today.js';
 import { $, closeSheet, render, setViews, showView, ui } from './ui.js';
@@ -51,7 +50,6 @@ window.addEventListener('appinstalled', () => {
   $('#install-btn').hidden = true;
 });
 
-persist(); // the seed or migrated data is not an edit to send to other devices
 showView('hoy');
 runSync();
 

@@ -1,8 +1,7 @@
 // Menu view: the list of dishes and the form to create or edit them.
 
 import { SECTION_ORDER, orderedCounters } from './domain.js';
-import { uid } from './seed.js';
-import { save, state } from './state.js';
+import { save, state, uid } from './state.js';
 import { $, closeSheet, deleteButton, dishGroups, h, openSheet, render, ui } from './ui.js';
 
 // Value of the section dropdown option that asks for a new section name.

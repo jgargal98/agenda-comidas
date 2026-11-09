@@ -14,22 +14,24 @@
  * editing or deleting a dish never rewrites history.
  */
 
-import { upgrade } from './migrations.js';
-import { STATE_VERSION, defaultState, uid } from './seed.js';
-
 const STORAGE_KEY = 'carta-comidas:v1';
+const VERSION = 9;
 const MAX_TARGET = 7;
 
-// Validates any object (stored, imported or from the server) into a safe state.
+export function uid() {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
+
+// Validates any object (stored, imported or from the server). Other versions are
+// rejected instead of guessing what they mean, so they can never damage the data.
 export function normalizeState(input) {
-  if (!input || typeof input !== 'object' || !Array.isArray(input.dishes) || typeof input.log !== 'object') {
+  if (input?.version !== VERSION || !Array.isArray(input.counters) || !Array.isArray(input.dishes) || typeof input.log !== 'object') {
     throw new Error('Formato no válido');
   }
-  const raw = upgrade(input);
 
   const seen = new Set();
   const counters = [];
-  for (const c of raw.counters) {
+  for (const c of input.counters) {
     if (typeof c?.label !== 'string' || !c.label.trim()) continue;
     const id = typeof c.id === 'string' && c.id && !seen.has(c.id) ? c.id : uid();
     seen.add(id);
@@ -44,7 +46,7 @@ export function normalizeState(input) {
 
   const validCounts = (list) => (Array.isArray(list) ? [...new Set(list.filter((id) => seen.has(id)))] : []);
 
-  const dishes = raw.dishes
+  const dishes = input.dishes
     .filter((d) => typeof d?.name === 'string' && d.name.trim())
     .map((d) => ({
       id: typeof d.id === 'string' ? d.id : uid(),
@@ -57,40 +59,29 @@ export function normalizeState(input) {
     ? { name: slot.name.trim(), counts: validCounts(slot.counts), dishId: slot.dishId ?? null }
     : null);
 
-  // Older versions stored a list of dishes. Beyond two, the rest join the second
-  // course so that nothing already eaten disappears from the history.
-  const joinSlots = (slots) => (slots.length < 2 ? slots[0] ?? null : {
-    name: slots.map((s) => s.name).join(' + '),
-    counts: [...new Set(slots.flatMap((s) => s.counts))],
-    dishId: null,
-  });
-
   const log = {};
-  for (const [key, entry] of Object.entries(raw.log || {})) {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(key) || !entry) continue;
-    const list = Array.isArray(entry) ? entry.map(validSlot).filter(Boolean) : null;
-    const primero = list ? list[0] ?? null : validSlot(entry.primero);
-    const segundo = list ? joinSlots(list.slice(1)) : validSlot(entry.segundo);
+  for (const [key, entry] of Object.entries(input.log ?? {})) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(key)) continue;
+    const primero = validSlot(entry?.primero);
+    const segundo = validSlot(entry?.segundo);
     if (primero || segundo) log[key] = { primero, segundo };
   }
 
-  return { version: STATE_VERSION, counters, dishes, log };
+  return { version: VERSION, counters, dishes, log };
 }
+
+const emptyState = () => ({ version: VERSION, counters: [], dishes: [], log: {} });
 
 function loadState() {
   const stored = localStorage.getItem(STORAGE_KEY);
-  if (!stored) return defaultState();
+  if (!stored) return emptyState();
   try {
-    const parsed = JSON.parse(stored);
-    // Keep an untouched copy in case a migration ever loses something
-    const version = Number(parsed.version) || 1;
-    if (version < STATE_VERSION) localStorage.setItem(`carta-comidas:v${version}-backup`, stored);
-    return normalizeState(parsed);
+    return normalizeState(JSON.parse(stored));
   } catch (err) {
-    console.warn('Could not read stored data, starting fresh', err);
-    // The fresh state is about to overwrite it, so keep what could not be read
+    console.warn('Could not read stored data, starting empty', err);
+    // The empty state is about to overwrite it, so keep what could not be read
     localStorage.setItem('carta-comidas:unreadable-backup', stored);
-    return defaultState();
+    return emptyState();
   }
 }
 
@@ -99,6 +90,8 @@ export let state = loadState();
 export function setState(next) {
   state = next;
 }
+
+export const isStateEmpty = () => !state.counters.length && !state.dishes.length && !Object.keys(state.log).length;
 
 // Writes to this device only, for changes that are not the user's own edits.
 export function persist() {
