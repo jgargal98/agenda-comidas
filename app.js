@@ -23,7 +23,7 @@ const RECENT_DAYS = 3;
 const MAX_TARGET = 7;
 
 // Beyond these amounts the Today view stops being readable at a glance.
-const RECOMMENDED = { min: 4, max: 4 };
+const RECOMMENDED = { min: 4, max: 5 };
 
 const COURSES = [
   { key: 'primero', label: 'Primero' },
