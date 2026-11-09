@@ -4,7 +4,7 @@
  * Storage and data model
  *
  * state = {
- *   version: 8,
+ *   version: 9,
  *   counters: [{ id, label, type: 'min' | 'max', target }],  // per week
  *   dishes:   [{ id, section, name, counts: [counterId] }],
  *   log:      { 'YYYY-MM-DD': { primero: Slot | null, segundo: Slot | null } }
@@ -18,7 +18,7 @@
  * ------------------------------------------------------------------ */
 
 const STORAGE_KEY = 'carta-comidas:v1';
-const STATE_VERSION = 8;
+const STATE_VERSION = 9;
 const RECENT_DAYS = 3;
 const MAX_TARGET = 7;
 
@@ -38,12 +38,12 @@ const SEED_COUNTERS = [
   { id: 'procesado', label: 'Procesado', type: 'max', target: 1 },
   { id: 'precocinado', label: 'Precocinado', type: 'max', target: 1 },
   { id: 'frito', label: 'Frito', type: 'max', target: 1 },
-  { id: 'refinados', label: 'Hidratos refinados', type: 'max', target: 4 },
+  { id: 'refinados', label: 'Hidratos', type: 'max', target: 4 },
 ];
 
 // Display order of sections in the menu; unknown sections go last.
 const SECTION_ORDER = [
-  'Legumbres', 'Guisos', 'Pasta', 'Noodles', 'Arroz', 'Carne y pescado',
+  'Legumbres', 'Guisos', 'Hidratos', 'Carne y pescado',
   'Verdura y cremas', 'Frío', 'Huevo', 'Precocinado',
 ];
 
@@ -56,21 +56,22 @@ const SEED_DISHES = [
   ['Legumbres', 'Lentejas', ['legumbres']],
   ['Legumbres', 'Ensalada de garbanzos', ['legumbres', 'verdura']],
   ['Guisos', 'Puchero con arroz', []],
-  ['Pasta', 'Pasta', ['refinados'], true],
-  ['Pasta', 'Carbonara', ['procesado']],
-  ['Pasta', 'Boloñesa', ['roja']],
-  ['Pasta', 'Ensalada de pasta', ['refinados']],
-  ['Noodles', 'Noodles', ['refinados'], true],
-  ['Arroz', 'Arroz blanco', ['refinados'], true],
-  ['Arroz', 'Arroz salteado', ['refinados']],
-  ['Arroz', 'Paella de pollo y gambas', ['refinados']],
+  ['Hidratos', 'Pasta', ['refinados'], true],
+  ['Hidratos', 'Carbonara', ['procesado', 'refinados']],
+  ['Hidratos', 'Boloñesa', ['roja', 'refinados']],
+  ['Hidratos', 'Ensalada de pasta', ['refinados']],
+  ['Hidratos', 'Noodles', ['refinados'], true],
+  ['Hidratos', 'Arroz blanco', ['refinados'], true],
+  ['Hidratos', 'Arroz salteado', ['refinados']],
+  ['Hidratos', 'Paella de pollo y gambas', ['refinados']],
+  ['Hidratos', 'Patatas', ['refinados'], true],
+  ['Hidratos', 'Patatas fritas', ['refinados', 'frito'], true],
   ['Carne y pescado', 'Salmón', ['pescado', 'azul']],
   ['Carne y pescado', 'Pollo', [], true],
   ['Carne y pescado', 'Pavo', [], true],
   ['Carne y pescado', 'Ternera', ['roja'], true],
   ['Carne y pescado', 'Cerdo', ['roja'], true],
   ['Carne y pescado', 'Gambas', ['pescado'], true],
-  ['Verdura y cremas', 'Patatas', [], true],
   ['Verdura y cremas', 'Ensalada', [], true],
   ['Verdura y cremas', 'Crema de calabacín', ['verdura'], true],
   ['Verdura y cremas', 'Crema de calabaza', ['verdura'], true],
@@ -267,6 +268,32 @@ function migrateToV8(raw) {
   return { ...raw, version: 8, dishes };
 }
 
+// Joins pasta, noodles and rice in one section that adds to a single carbs
+// counter, and adds fried potatoes. Other sections and counters stay as they are.
+function migrateToV9(raw) {
+  const labelled = (label) => raw.counters.find((c) => typeof c?.label === 'string' && c.label.trim().toLowerCase() === label);
+  const carbs = labelled('hidratos') ?? raw.counters.find((c) => c?.id === 'refinados') ?? labelled('hidratos refinados');
+  const fried = raw.counters.find((c) => c?.id === 'frito') ?? labelled('frito');
+  const counters = raw.counters.map((c) => (c === carbs ? { ...c, label: 'Hidratos' } : c));
+
+  const asCarbs = (d) => ({
+    ...d,
+    section: 'Hidratos',
+    counts: [...new Set([...(Array.isArray(d.counts) ? d.counts : []), ...(carbs ? [carbs.id] : [])])],
+  });
+  const lowName = (d) => (typeof d?.name === 'string' ? d.name.trim().toLowerCase() : '');
+  const dishes = raw.dishes.map((d) => {
+    if (['Pasta', 'Noodles', 'Arroz'].includes(d?.section)) return asCarbs(d);
+    if (lowName(d) === 'patatas' && d.section === 'Verdura y cremas') return asCarbs(d);
+    return d;
+  });
+
+  if (!dishes.some((d) => lowName(d) === 'patatas fritas')) {
+    dishes.push(asCarbs({ id: uid(), name: 'Patatas fritas', counts: fried ? [fried.id] : [] }));
+  }
+  return { ...raw, version: 9, counters, dishes };
+}
+
 const clampTarget = (value, fallback) => {
   const n = Number(value);
   return Number.isInteger(n) && n >= 0 && n <= MAX_TARGET ? n : fallback;
@@ -281,7 +308,8 @@ function normalizeState(input) {
   const atV4 = (Number(upgraded.version) || 1) < 4 ? migrateToV4(upgraded) : upgraded;
   const atV6 = Number(atV4.version) < 6 ? migrateToV6(atV4) : atV4;
   const atV7 = Number(atV6.version) < 7 ? migrateToV7(atV6) : atV6;
-  const raw = Number(atV7.version) < 8 ? migrateToV8(atV7) : atV7;
+  const atV8 = Number(atV7.version) < 8 ? migrateToV8(atV7) : atV7;
+  const raw = Number(atV8.version) < 9 ? migrateToV9(atV8) : atV8;
 
   const seen = new Set();
   const counters = [];
