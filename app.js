@@ -22,9 +22,6 @@ const STATE_VERSION = 8;
 const RECENT_DAYS = 3;
 const MAX_TARGET = 7;
 
-// Beyond these amounts the Today view stops being readable at a glance.
-const RECOMMENDED = { min: 4, max: 5 };
-
 const COURSES = [
   { key: 'primero', label: 'Primero' },
   { key: 'segundo', label: 'Segundo' },
@@ -341,6 +338,8 @@ function loadState() {
     }
   } catch (err) {
     console.warn('Could not read stored data, starting fresh', err);
+    // The fresh state is about to overwrite it, so keep what could not be read
+    localStorage.setItem('carta-comidas:unreadable-backup', localStorage.getItem(STORAGE_KEY));
   }
   return defaultState();
 }
@@ -402,6 +401,7 @@ function weekDays(key) {
 const fmtLong = new Intl.DateTimeFormat('es-ES', { weekday: 'long', day: 'numeric', month: 'long' });
 const fmtShort = new Intl.DateTimeFormat('es-ES', { day: 'numeric', month: 'short' });
 const fmtDow = new Intl.DateTimeFormat('es-ES', { weekday: 'short' });
+const fmtStamp = new Intl.DateTimeFormat('es-ES', { dateStyle: 'short', timeStyle: 'short' });
 
 // Spanish dates are lower case; only the first letter of a label is capitalised.
 const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
@@ -731,21 +731,6 @@ function renderMenu() {
   );
 }
 
-// Radio group for a fixed list of [value, label] options, with its reader.
-function radioGroup(legend, groupName, options, selected) {
-  const inputs = options.map(([value]) => {
-    const input = h('input', { type: 'radio', name: groupName, value });
-    input.checked = value === selected;
-    return input;
-  });
-  return {
-    element: h('fieldset', { class: 'choice' },
-      h('legend', {}, legend),
-      options.map(([, label], i) => h('label', { class: 'check' }, inputs[i], label))),
-    value: () => inputs.find((i) => i.checked).value,
-  };
-}
-
 // Delete button that needs a second tap instead of a confirm() dialog.
 function deleteButton(label, armedLabel, onConfirm) {
   let armed = false;
@@ -853,7 +838,6 @@ function renderWeek() {
 
 function renderCounters() {
   const counters = orderedCounters();
-  const crowded = Object.entries(RECOMMENDED).some(([type, limit]) => counters.filter((c) => c.type === type).length > limit);
 
   $('#counters').replaceChildren(
     ...counters.map((c) => {
@@ -873,9 +857,6 @@ function renderCounters() {
           h('button', { class: 'icon-btn', 'aria-label': `Subir ${c.label}`, onclick: () => change(1) }, '+')));
     }),
     ...(counters.length ? [] : [h('p', { class: 'hint' }, 'No hay contadores todavía.')]),
-    ...(crowded
-      ? [h('p', { class: 'hint' }, `Con más de ${RECOMMENDED.min} mínimos o ${RECOMMENDED.max} máximos, la pantalla Hoy deja de leerse de un vistazo.`)]
-      : []),
     h('button', { class: 'btn block', onclick: () => openCounterForm(null) }, 'Añadir contador'),
   );
 }
@@ -893,7 +874,11 @@ function openCounterForm(counter) {
       e.target.setCustomValidity(taken ? 'Ya hay un contador con este nombre' : '');
     },
   });
-  const type = radioGroup('Tipo', 'counter-type', [['min', 'Mínimo: avisa de lo que falta'], ['max', 'Máximo: avisa si te pasas']], counter?.type ?? 'min');
+  const types = [['min', 'Mínimo: avisa de lo que falta'], ['max', 'Máximo: avisa si te pasas']].map(([value, label]) => {
+    const input = h('input', { type: 'radio', name: 'counter-type', value });
+    input.checked = value === (counter?.type ?? 'min');
+    return [input, label];
+  });
   const target = h('input', { type: 'number', min: 0, max: MAX_TARGET, step: 1, required: true, inputmode: 'numeric', value: counter?.target ?? 1 });
 
   const used = isNew ? 0 : state.dishes.filter((d) => d.counts.includes(counter.id)).length;
@@ -910,7 +895,7 @@ function openCounterForm(counter) {
   const form = h('form', {
     onsubmit: (e) => {
       e.preventDefault();
-      const data = { label: name.value.trim(), type: type.value(), target: Number(target.value) };
+      const data = { label: name.value.trim(), type: types.find(([i]) => i.checked)[0].value, target: Number(target.value) };
       if (!data.label) { name.focus(); return; }
       if (isNew) state.counters.push({ id: uid(), ...data });
       else Object.assign(counter, data);
@@ -920,7 +905,9 @@ function openCounterForm(counter) {
     },
   },
   h('label', { class: 'field' }, h('span', {}, 'Nombre'), name),
-  type.element,
+  h('fieldset', { class: 'choice' },
+    h('legend', {}, 'Tipo'),
+    types.map(([input, label]) => h('label', { class: 'check' }, input, label))),
   h('label', { class: 'field' }, h('span', {}, 'Veces por semana'), target),
   h('button', { class: 'btn primary block', type: 'submit' }, 'Guardar'),
   del);
@@ -973,13 +960,13 @@ const SYNC_META_KEY = 'carta-comidas:sync';
 const CONFLICT_BACKUP_KEY = 'carta-comidas:conflict-backup';
 const SYNC_DELAY_MS = 1000;
 const SYNC_TIMEOUT_MS = 10000;
+const DISCONNECTED = { key: '', revision: 0, dirty: false, lastSync: null };
 
 function loadSyncMeta() {
-  const empty = { key: '', revision: 0, dirty: false, lastSync: null };
   try {
-    return { ...empty, ...JSON.parse(localStorage.getItem(SYNC_META_KEY)) };
+    return { ...DISCONNECTED, ...JSON.parse(localStorage.getItem(SYNC_META_KEY)) };
   } catch {
-    return empty;
+    return { ...DISCONNECTED };
   }
 }
 
@@ -1060,6 +1047,9 @@ async function uploadState(baseRevision) {
   if (sync.meta.dirty) scheduleSync();
 }
 
+// True when the server still holds data in an older format than this app's.
+const isOutdated = (remote) => remote.data && (Number(remote.data.version) || 1) < STATE_VERSION;
+
 function adoptRemote(remote) {
   let incoming;
   try {
@@ -1074,6 +1064,7 @@ function adoptRemote(remote) {
   sync.meta.dirty = false;
   syncDone(remote.revision);
   render();
+  if (isOutdated(remote)) scheduleSync(0);
 }
 
 // Keeps the version the user is about to discard, in case it was the wrong choice.
@@ -1090,7 +1081,7 @@ function openConflict(remote) {
     const days = Object.keys(data.log ?? {}).length;
     return `${days} ${days === 1 ? 'día' : 'días'} con almuerzo, ${data.dishes.length} platos`;
   };
-  const when = new Date(remote.updatedAt).toLocaleString('es-ES', { dateStyle: 'short', timeStyle: 'short' });
+  const when = fmtStamp.format(new Date(remote.updatedAt));
 
   const choose = async (action) => {
     closeSheet();
@@ -1150,7 +1141,8 @@ async function syncOnce() {
 
   if (remote.revision === 0) await uploadState(0);
   else if (remote.revision === meta.revision) {
-    if (meta.dirty) await uploadState(remote.revision);
+    // This device already holds that data converted, so uploading loses nothing
+    if (meta.dirty || isOutdated(remote)) await uploadState(remote.revision);
     else syncDone(remote.revision);
   } else if (meta.dirty || meta.revision === 0) openConflict(remote);
   else adoptRemote(remote);
@@ -1191,7 +1183,7 @@ function renderSync() {
         e.preventDefault();
         const value = key.value.trim();
         if (!value) return;
-        Object.assign(sync.meta, { key: value, revision: 0, dirty: false, lastSync: null });
+        Object.assign(sync.meta, DISCONNECTED, { key: value });
         saveSyncMeta();
         setSyncStatus('Conectando…');
         runSync();
@@ -1202,8 +1194,7 @@ function renderSync() {
     return;
   }
 
-  const last = meta.lastSync
-    && `Última vez: ${new Date(meta.lastSync).toLocaleString('es-ES', { dateStyle: 'short', timeStyle: 'short' })}.`;
+  const last = meta.lastSync && `Última vez: ${fmtStamp.format(new Date(meta.lastSync))}.`;
   $('#sync').replaceChildren(
     h('p', { class: 'hint', role: 'status' }, sync.status || 'Conectado.', meta.dirty ? ' Hay cambios pendientes de subir.' : ''),
     last && h('p', { class: 'hint' }, last),
@@ -1214,7 +1205,7 @@ function renderSync() {
         onclick: () => {
           // Only this device stops syncing: its data and the server's stay as they are
           clearTimeout(sync.timer);
-          Object.assign(sync.meta, { key: '', revision: 0, dirty: false, lastSync: null });
+          Object.assign(sync.meta, DISCONNECTED);
           saveSyncMeta();
           sync.status = '';
           renderSync();
@@ -1223,9 +1214,6 @@ function renderSync() {
 }
 
 window.addEventListener('online', () => scheduleSync(0));
-document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') scheduleSync(0);
-});
 
 /* ---------- Install prompt ---------- */
 
@@ -1271,10 +1259,12 @@ $('#prev-day').addEventListener('click', () => { ui.day = addDays(ui.day, -1); u
 $('#next-day').addEventListener('click', () => { ui.day = addDays(ui.day, 1); ui.idea = null; renderToday(); });
 $('#go-today').addEventListener('click', () => { ui.day = todayKey(); ui.idea = null; renderToday(); });
 
-// When the app is reopened on a new day, jump to the real today
+// On returning to the app: look for changes from other devices and, if it is
+// a new day, jump to the real today
 let lastSeenToday = todayKey();
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState !== 'visible') return;
+  scheduleSync(0);
   const now = todayKey();
   if (now !== lastSeenToday) {
     if (ui.day === lastSeenToday) ui.day = now;

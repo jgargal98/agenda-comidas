@@ -1,7 +1,7 @@
 {
   "name": "Carta de comidas",
   "short_name": "Comidas",
-  "description": "Carta de almuerzos con mínimos semanales",
+  "description": "Carta de almuerzos con contadores semanales",
   "lang": "es",
   "start_url": "./",
   "scope": "./",
