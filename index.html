@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#2f6b4f" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#16241d" media="(prefers-color-scheme: dark)">
-  <meta name="description" content="Carta de almuerzos con mínimos semanales">
+  <meta name="description" content="Carta de almuerzos con primeros, segundos y contadores semanales">
   <title>Carta de comidas</title>
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon-192.png" type="image/png">
@@ -18,7 +18,7 @@
   </header>
 
   <main>
-    <!-- Today: the lunch of the selected day and weekly progress -->
+    <!-- Today: first and second course of the selected day and weekly progress -->
     <section id="view-hoy" class="view" aria-labelledby="title">
       <div class="daynav">
         <button class="icon-btn" id="prev-day" aria-label="Día anterior">&#8249;</button>
@@ -34,20 +34,17 @@
         <div id="progress" class="progress"></div>
       </div>
 
-      <div class="card">
-        <h2 class="card-title">Almuerzo</h2>
-        <div id="slot" class="slot"></div>
-        <div id="slot-actions" class="actions"></div>
-      </div>
+      <!-- One card per course; either can stay empty -->
+      <div id="slots"></div>
     </section>
 
-    <!-- Menu: dish catalogue grouped by section -->
+    <!-- Menu: dish catalogue grouped by course and section -->
     <section id="view-carta" class="view" hidden>
       <button class="btn primary block" id="add-dish">Añadir plato</button>
       <div id="menu-list"></div>
     </section>
 
-    <!-- Week: Monday to Sunday overview, goals and backup -->
+    <!-- Week: Monday to Sunday overview, counters and backup -->
     <section id="view-semana" class="view" hidden>
       <div class="daynav">
         <button class="icon-btn" id="prev-week" aria-label="Semana anterior">&#8249;</button>
@@ -57,8 +54,8 @@
       <ul id="week-list" class="week-list"></ul>
 
       <div class="card">
-        <h2 class="card-title">Objetivos semanales</h2>
-        <div id="goals"></div>
+        <h2 class="card-title">Contadores semanales</h2>
+        <div id="counters"></div>
       </div>
 
       <div class="card">
