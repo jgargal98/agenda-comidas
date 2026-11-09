@@ -1,7 +1,7 @@
-// Today view: weekly progress and the two courses of the selected day.
+// Today view: weekly progress and the dishes of the selected day.
 
 import { addDays, cap, fmtLong, fromKey, todayKey } from './dates.js';
-import { COURSES, courseImpact, daySlots, orderedCounters, recentNames, setSlot, slotFromDish, suggestDish, weekTotals } from './domain.js';
+import { addImpact, addSlot, daySlots, orderedCounters, recentNames, removeSlot, slotFromDish, suggestDish, weekTotals } from './domain.js';
 import { state } from './state.js';
 import { $, closeSheet, dishGroups, h, openSheet, tagList, ui } from './ui.js';
 
@@ -45,48 +45,61 @@ function button(text, onclick, variant = '') {
   return h('button', { class: `btn ${variant}`, onclick }, text);
 }
 
-function courseCard(key, { key: course, label }) {
-  const slot = state.log[key]?.[course] ?? null;
-  const idea = ui.idea?.course === course ? ui.idea.dish : null;
-  const notice = ui.notice?.course === course ? ui.notice.text : '';
-  if (notice) ui.notice = null;
+// Adds a dish to the selected day and goes back to the Today view.
+function addToDay(slot) {
+  addSlot(ui.day, slot);
+  ui.idea = null;
+  closeSheet();
+  renderToday();
+}
 
-  const clearIdea = () => {
-    ui.idea = null;
-    renderToday();
-  };
-  const askIdea = (excludeId) => {
-    const dish = suggestDish(key, course, excludeId);
-    ui.idea = dish && { course, dish };
-    if (!dish) ui.notice = { course, text: 'No hay más ideas dentro de tus límites.' };
-    renderToday();
-  };
-  const choose = (chosen) => {
-    setSlot(key, course, chosen);
-    clearIdea();
-  };
+function askIdea(excludeId) {
+  ui.idea = suggestDish(ui.day, excludeId);
+  if (!ui.idea) ui.notice = 'No hay más ideas dentro de tus límites.';
+  renderToday();
+}
+
+function lunchCard(key) {
+  const slots = daySlots(key);
+  const { idea, notice } = ui;
+  ui.notice = '';
+
+  const list = slots.length > 0 && h('ul', { class: 'lunch-list' }, slots.map((slot, i) =>
+    h('li', { class: 'lunch-item' },
+      h('div', {}, h('p', { class: 'slot-name' }, slot.name), tagList(slot.counts)),
+      h('button', {
+        class: 'btn danger',
+        'aria-label': `Quitar ${slot.name}`,
+        onclick: () => {
+          removeSlot(key, i);
+          renderToday();
+        },
+      }, 'Quitar'))));
 
   const content = idea
-    ? [h('p', { class: 'idea-label' }, 'Idea'), h('p', { class: 'slot-name' }, idea.name), tagList(idea.counts)]
-    : slot
-      ? [h('p', { class: 'slot-name' }, slot.name), tagList(slot.counts)]
-      : [h('p', { class: 'slot-empty' }, 'Sin elegir')];
+    ? [
+        list,
+        h('div', { class: 'idea' }, h('p', { class: 'idea-label' }, 'Idea'), h('p', { class: 'slot-name' }, idea.name), tagList(idea.counts)),
+      ]
+    : list || h('p', { class: 'slot-empty' }, 'Sin elegir');
 
   const actions = idea
     ? [
-        button('Me lo quedo', () => choose(slotFromDish(idea)), 'primary'),
+        button('Me lo quedo', () => addToDay(slotFromDish(idea)), 'primary'),
         button('Otra idea', () => askIdea(idea.id)),
-        button('Cancelar', clearIdea),
+        button('Cancelar', () => {
+          ui.idea = null;
+          renderToday();
+        }),
       ]
     : [
-        button(slot ? 'Cambiar' : 'Elegir de la carta', () => openPicker(course, label), 'primary'),
-        button('Dame una idea', () => askIdea(slot?.dishId)),
-        button('Otra cosa', () => openCustom(course)),
-        slot && button('Quitar', () => choose(null), 'danger'),
+        button(slots.length ? 'Añadir de la carta' : 'Elegir de la carta', openPicker, 'primary'),
+        button('Dame una idea', () => askIdea()),
+        button('Otra cosa', openCustom),
       ];
 
   return h('div', { class: 'card' },
-    h('h2', { class: 'card-title' }, label),
+    h('h2', { class: 'card-title' }, 'Almuerzo'),
     content,
     h('div', { class: 'actions' }, actions),
     notice && h('p', { class: 'hint', role: 'status' }, notice));
@@ -100,14 +113,14 @@ export function renderToday() {
   $('#go-today').hidden = isToday;
 
   renderProgress(key);
-  $('#lunch').replaceChildren(...COURSES.map((c) => courseCard(key, c)));
+  $('#lunch').replaceChildren(lunchCard(key));
 }
 
-function openPicker(course, label) {
+function openPicker() {
   const key = ui.day;
   const recent = recentNames(key);
-  const { blocked } = courseImpact(key, course);
-  const chosen = new Set(daySlots(key, course).map((slot) => slot.dishId));
+  const { blocked } = addImpact(key);
+  const chosen = new Set(daySlots(key).map((slot) => slot.dishId));
 
   const content = state.dishes.length
     ? dishGroups(state.dishes, (d) => ({
@@ -118,19 +131,13 @@ function openPicker(course, label) {
           recent.has(d.name.toLowerCase()) && 'reciente',
           d.counts.some((c) => blocked.has(c)) && 'superaría un límite',
         ].filter(Boolean),
-        onclick: () => {
-          setSlot(key, course, slotFromDish(d));
-          ui.idea = null;
-          closeSheet();
-          renderToday();
-        },
+        onclick: () => addToDay(slotFromDish(d)),
       }))
     : [h('p', { class: 'hint' }, 'La carta está vacía. Añade platos en la pestaña Carta.')];
-  openSheet(`Elegir ${label.toLowerCase()}`, ...content);
+  openSheet('Elegir de la carta', ...content);
 }
 
-function openCustom(course) {
-  const key = ui.day;
+function openCustom() {
   const name = h('input', { type: 'text', maxlength: 80, placeholder: 'Por ejemplo: comida fuera' });
   const checks = orderedCounters().map((c) => [h('input', { type: 'checkbox', value: c.id }), c.label]);
   const form = h('form', {
@@ -141,10 +148,7 @@ function openCustom(course) {
         name.focus();
         return;
       }
-      setSlot(key, course, { name: text, counts: checks.filter(([i]) => i.checked).map(([i]) => i.value), dishId: null });
-      ui.idea = null;
-      closeSheet();
-      renderToday();
+      addToDay({ name: text, counts: checks.filter(([i]) => i.checked).map(([i]) => i.value), dishId: null });
     },
   },
   h('label', { class: 'field' }, h('span', {}, 'Qué has comido'), name),

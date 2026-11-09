@@ -30,8 +30,8 @@ export const ui = {
   view: 'hoy',
   day: todayKey(),
   week: weekStart(todayKey()),
-  idea: null, // { course, dish } currently proposed by "Dame una idea"
-  notice: null, // { course, text } shown once, on the next render
+  idea: null, // dish currently proposed by "Dame una idea"
+  notice: '', // shown once, on the next render
 };
 
 /* ---------- Bottom sheet ---------- */

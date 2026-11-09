@@ -5,7 +5,7 @@
  *   version,
  *   counters: [{ id, label, type: 'min' | 'max', target }],  // per week
  *   dishes:   [{ id, section, name, counts: [counterId] }],
- *   log:      { 'YYYY-MM-DD': { primero: Slot | null, segundo: Slot | null } }
+ *   log:      { 'YYYY-MM-DD': [Slot] }  // any number of dishes, in any combination
  * }
  * Slot = { name, counts, dishId | null }
  *
@@ -15,7 +15,8 @@
  */
 
 const STORAGE_KEY = 'carta-comidas:v1';
-const VERSION = 9;
+const VERSION = 10;
+const PREVIOUS_VERSION = 9; // same data, but each day had a first and a second course
 const MAX_TARGET = 7;
 
 export function uid() {
@@ -25,7 +26,8 @@ export function uid() {
 // Validates any object (stored, imported or from the server). Other versions are
 // rejected instead of guessing what they mean, so they can never damage the data.
 export function normalizeState(input) {
-  if (input?.version !== VERSION || !Array.isArray(input.counters) || !Array.isArray(input.dishes) || typeof input.log !== 'object') {
+  const knownVersion = input?.version === VERSION || input?.version === PREVIOUS_VERSION;
+  if (!knownVersion || !Array.isArray(input.counters) || !Array.isArray(input.dishes) || typeof input.log !== 'object') {
     throw new Error('Formato no válido');
   }
 
@@ -62,9 +64,9 @@ export function normalizeState(input) {
   const log = {};
   for (const [key, entry] of Object.entries(input.log ?? {})) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(key)) continue;
-    const primero = validSlot(entry?.primero);
-    const segundo = validSlot(entry?.segundo);
-    if (primero || segundo) log[key] = { primero, segundo };
+    const list = Array.isArray(entry) ? entry : [entry?.primero, entry?.segundo];
+    const slots = list.map(validSlot).filter(Boolean);
+    if (slots.length) log[key] = slots;
   }
 
   return { version: VERSION, counters, dishes, log };
