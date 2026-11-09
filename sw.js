@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump this on every release so old caches are dropped.
-const CACHE = 'carta-comidas-v5';
+const CACHE = 'carta-comidas-v6';
 const ASSETS = [
   './',
   'index.html',
@@ -29,7 +29,9 @@ self.addEventListener('activate', (event) => {
 // and refresh the cached copy in the background when there is network.
 self.addEventListener('fetch', (event) => {
   const { request } = event;
-  if (request.method !== 'GET' || new URL(request.url).origin !== self.location.origin) return;
+  const url = new URL(request.url);
+  // The sync API must always reach the network: a cached answer would hide other devices' changes
+  if (request.method !== 'GET' || url.origin !== self.location.origin || url.pathname.startsWith('/api/')) return;
 
   event.respondWith(
     caches.open(CACHE).then(async (cache) => {

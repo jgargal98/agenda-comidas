@@ -275,12 +275,19 @@ function loadState() {
 
 let state = loadState();
 
-function save() {
+// Writes to this device only, for changes that are not the user's own edits.
+function persist() {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   } catch (err) {
     console.error('Could not save data', err);
   }
+}
+
+// Saves a user's edit and queues it for the other devices.
+function save() {
+  persist();
+  markLocalEdit();
 }
 
 /* ------------------------------------------------------------------ *
@@ -508,6 +515,8 @@ function openSheet(title, ...content) {
 function closeSheet() {
   $('#sheet').hidden = true;
   $('#sheet-backdrop').hidden = true;
+  // A sync that waited for the sheet can run now
+  if (sync.deferred) scheduleSync(0);
 }
 
 $('#sheet-close').addEventListener('click', closeSheet);
@@ -834,6 +843,7 @@ function renderWeek() {
   );
 
   renderCounters();
+  renderSync();
 }
 
 function renderCounters() {
@@ -945,6 +955,270 @@ $('#import-file').addEventListener('change', async (e) => {
   }
 });
 
+/* ---------- Sync between devices ---------- *
+ *
+ * localStorage stays the working copy, so the app keeps working offline. The
+ * server holds one document with a revision number; `revision` below is the
+ * last one this device has seen and `dirty` means it has edits not uploaded yet.
+ * Two different versions are never merged or overwritten silently: the user
+ * chooses, and the discarded version is kept in CONFLICT_BACKUP_KEY.
+ */
+
+const SYNC_META_KEY = 'carta-comidas:sync';
+const CONFLICT_BACKUP_KEY = 'carta-comidas:conflict-backup';
+const SYNC_DELAY_MS = 1000;
+const SYNC_TIMEOUT_MS = 10000;
+
+function loadSyncMeta() {
+  const empty = { key: '', revision: 0, dirty: false, lastSync: null };
+  try {
+    return { ...empty, ...JSON.parse(localStorage.getItem(SYNC_META_KEY)) };
+  } catch {
+    return empty;
+  }
+}
+
+const sync = {
+  meta: loadSyncMeta(),
+  status: '',
+  edits: 0, // local edits in this session, to notice one made during a request
+  running: false,
+  rerun: false,
+  deferred: false,
+  timer: null,
+};
+
+function saveSyncMeta() {
+  try {
+    localStorage.setItem(SYNC_META_KEY, JSON.stringify(sync.meta));
+  } catch (err) {
+    console.error('Could not save sync data', err);
+  }
+}
+
+function setSyncStatus(text) {
+  sync.status = text;
+  if (ui.view === 'semana') renderSync();
+}
+
+function scheduleSync(delay = SYNC_DELAY_MS) {
+  clearTimeout(sync.timer);
+  sync.timer = setTimeout(runSync, delay);
+}
+
+function markLocalEdit() {
+  sync.edits += 1;
+  if (!sync.meta.key) return;
+  sync.meta.dirty = true;
+  saveSyncMeta();
+  scheduleSync();
+}
+
+function syncRequest(method, body) {
+  return fetch('/api/state', {
+    method,
+    headers: { Authorization: `Bearer ${sync.meta.key}`, 'Content-Type': 'application/json' },
+    body: body && JSON.stringify(body),
+    signal: AbortSignal.timeout(SYNC_TIMEOUT_MS),
+  });
+}
+
+function syncDone(revision) {
+  sync.meta.revision = revision;
+  sync.meta.lastSync = new Date().toISOString();
+  saveSyncMeta();
+  setSyncStatus('Sincronizado.');
+}
+
+// Explains a failed answer. Returns true when the response can be used.
+function checkSyncResponse(res) {
+  if (res.ok) return true;
+  if (res.status === 401) setSyncStatus('La clave no es correcta.');
+  else if (res.status === 503) setSyncStatus('La sincronización no está configurada en el servidor.');
+  else setSyncStatus('El servidor no ha podido sincronizar. Se reintentará más tarde.');
+  return false;
+}
+
+async function uploadState(baseRevision) {
+  const editsAtStart = sync.edits;
+  const res = await syncRequest('PUT', { baseRevision, data: state });
+  if (res.status === 409) {
+    // Another device saved first: start over to see its version
+    sync.rerun = true;
+    return;
+  }
+  if (!checkSyncResponse(res)) return;
+  const { revision } = await res.json();
+  // An edit made during the upload still has to go up
+  sync.meta.dirty = sync.edits !== editsAtStart;
+  syncDone(revision);
+  if (sync.meta.dirty) scheduleSync();
+}
+
+function adoptRemote(remote) {
+  let incoming;
+  try {
+    incoming = normalizeState(remote.data);
+  } catch {
+    setSyncStatus('Los datos del servidor no son válidos. No se han aplicado.');
+    return;
+  }
+  state = incoming;
+  ui.idea = null;
+  persist();
+  sync.meta.dirty = false;
+  syncDone(remote.revision);
+  render();
+}
+
+// Keeps the version the user is about to discard, in case it was the wrong choice.
+function backupDiscarded(data) {
+  try {
+    localStorage.setItem(CONFLICT_BACKUP_KEY, JSON.stringify(data));
+  } catch (err) {
+    console.error('Could not keep the discarded version', err);
+  }
+}
+
+function openConflict(remote) {
+  const describe = (data) => `${Object.keys(data.log ?? {}).length} días con almuerzo, ${data.dishes.length} platos`;
+  const when = new Date(remote.updatedAt).toLocaleString('es-ES', { dateStyle: 'short', timeStyle: 'short' });
+
+  const choose = async (action) => {
+    closeSheet();
+    try {
+      await action();
+    } catch {
+      setSyncStatus('Sin conexión. Se sincronizará cuando vuelva la red.');
+    }
+    // This runs outside runSync, so a conflict on upload has to restart it here
+    if (sync.rerun) {
+      sync.rerun = false;
+      scheduleSync(0);
+    }
+  };
+  const keepLocal = () => choose(() => {
+    backupDiscarded(remote.data);
+    sync.meta.dirty = true;
+    saveSyncMeta();
+    return uploadState(remote.revision);
+  });
+  const keepRemote = () => choose(() => {
+    backupDiscarded(state);
+    adoptRemote(remote);
+  });
+
+  setSyncStatus('Hay dos versiones distintas. Elige cuál conservar.');
+  openSheet('Hay dos versiones',
+    h('p', {}, 'Este dispositivo y el servidor tienen datos distintos. Elige cuál conservar en todos tus dispositivos.'),
+    h('button', { class: 'btn block', onclick: keepRemote }, `La del servidor (${when})`),
+    h('p', { class: 'hint' }, describe(remote.data)),
+    h('button', { class: 'btn block', onclick: keepLocal }, 'La de este dispositivo'),
+    h('p', { class: 'hint' }, describe(state)));
+}
+
+async function syncOnce() {
+  const { meta } = sync;
+  const editsAtStart = sync.edits;
+  const res = await syncRequest('GET');
+  if (!checkSyncResponse(res)) return;
+  const remote = await res.json();
+
+  // An edit made during the request changes the decision: look again
+  if (sync.edits !== editsAtStart) {
+    sync.rerun = true;
+    return;
+  }
+  // An older copy of the app must not rewrite data it does not fully understand
+  if (Number(remote.data?.version) > STATE_VERSION) {
+    setSyncStatus('Otro dispositivo usa una versión más nueva. Vuelve a abrir la app para actualizarla.');
+    return;
+  }
+  // The sheet may have been opened during the request
+  if (!$('#sheet').hidden) {
+    sync.deferred = true;
+    return;
+  }
+
+  if (remote.revision === 0) await uploadState(0);
+  else if (remote.revision === meta.revision) {
+    if (meta.dirty) await uploadState(remote.revision);
+    else syncDone(remote.revision);
+  } else if (meta.dirty || meta.revision === 0) openConflict(remote);
+  else adoptRemote(remote);
+}
+
+async function runSync() {
+  if (!sync.meta.key) return;
+  if (sync.running) {
+    sync.rerun = true;
+    return;
+  }
+  // Replacing the state under an open form would lose what is being edited
+  if (!$('#sheet').hidden) {
+    sync.deferred = true;
+    return;
+  }
+  sync.deferred = false;
+  sync.running = true;
+  try {
+    await syncOnce();
+  } catch {
+    setSyncStatus('Sin conexión. Se sincronizará cuando vuelva la red.');
+  } finally {
+    sync.running = false;
+    if (sync.rerun) {
+      sync.rerun = false;
+      scheduleSync(0);
+    }
+  }
+}
+
+function renderSync() {
+  const { meta } = sync;
+  if (!meta.key) {
+    const key = h('input', { type: 'password', required: true, autocomplete: 'off' });
+    $('#sync').replaceChildren(h('form', {
+      onsubmit: (e) => {
+        e.preventDefault();
+        const value = key.value.trim();
+        if (!value) return;
+        Object.assign(sync.meta, { key: value, revision: 0, dirty: false, lastSync: null });
+        saveSyncMeta();
+        setSyncStatus('Conectando…');
+        runSync();
+      },
+    },
+    h('label', { class: 'field' }, h('span', {}, 'Clave de sincronización'), key),
+    h('button', { class: 'btn primary', type: 'submit' }, 'Conectar')));
+    return;
+  }
+
+  const last = meta.lastSync
+    && `Última vez: ${new Date(meta.lastSync).toLocaleString('es-ES', { dateStyle: 'short', timeStyle: 'short' })}.`;
+  $('#sync').replaceChildren(
+    h('p', { class: 'hint', role: 'status' }, sync.status || 'Conectado.', meta.dirty ? ' Hay cambios pendientes de subir.' : ''),
+    last && h('p', { class: 'hint' }, last),
+    h('div', { class: 'actions' },
+      h('button', { class: 'btn', onclick: runSync }, 'Sincronizar ahora'),
+      h('button', {
+        class: 'btn danger',
+        onclick: () => {
+          // Only this device stops syncing: its data and the server's stay as they are
+          clearTimeout(sync.timer);
+          Object.assign(sync.meta, { key: '', revision: 0, dirty: false, lastSync: null });
+          saveSyncMeta();
+          sync.status = '';
+          renderSync();
+        },
+      }, 'Desconectar')));
+}
+
+window.addEventListener('online', () => scheduleSync(0));
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') scheduleSync(0);
+});
+
 /* ---------- Install prompt ---------- */
 
 let installEvent = null;
@@ -1001,8 +1275,9 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 
-save(); // persist the seed or the migrated data on first run
+persist(); // the seed or migrated data is not an edit to send to other devices
 showView('hoy');
+runSync();
 
 /* ---------- Service worker ---------- */
 

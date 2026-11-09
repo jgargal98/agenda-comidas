@@ -1,0 +1,18 @@
+{
+  "name": "menu-comidas",
+  "main": "worker.js",
+  "compatibility_date": "2026-11-01",
+  "assets": {
+    "directory": ".",
+    "binding": "ASSETS",
+    // Only the API needs the Worker; everything else stays a free static asset
+    "run_worker_first": ["/api/*"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "carta-comidas",
+      "database_id": "203fed64-b07c-46ee-91f1-3e40d3121f3c"
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+.assetsignore
+.git
+.gitignore
+.wrangler
+node_modules
+worker.js
+wrangler.jsonc
