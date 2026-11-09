@@ -1,12 +1,23 @@
 'use strict';
 
 // Bump this on every release so old caches are dropped.
-const CACHE = 'carta-comidas-v12';
+const CACHE = 'carta-comidas-v13';
 const ASSETS = [
   './',
   'index.html',
   'styles.css',
-  'app.js',
+  'js/main.js',
+  'js/backup.js',
+  'js/dates.js',
+  'js/domain.js',
+  'js/menu.js',
+  'js/migrations.js',
+  'js/seed.js',
+  'js/state.js',
+  'js/sync.js',
+  'js/today.js',
+  'js/ui.js',
+  'js/week.js',
   'manifest.webmanifest',
   'icon-192.png',
   'icon-512.png',
