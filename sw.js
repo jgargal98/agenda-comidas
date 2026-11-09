@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump this on every release so old caches are dropped.
-const CACHE = 'carta-comidas-v6';
+const CACHE = 'carta-comidas-v7';
 const ASSETS = [
   './',
   'index.html',
