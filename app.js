@@ -4,7 +4,7 @@
  * Storage and data model
  *
  * state = {
- *   version: 4,
+ *   version: 5,
  *   counters: [{ id, label, type: 'min' | 'max', target }],  // per week
  *   dishes:   [{ id, section, name, counts: [counterId], pairsWith: section | null, pairOnly }],
  *   log:      { 'YYYY-MM-DD': [Slot] }  // any number of dishes, any combination
@@ -21,7 +21,7 @@
  * ------------------------------------------------------------------ */
 
 const STORAGE_KEY = 'carta-comidas:v1';
-const STATE_VERSION = 4;
+const STATE_VERSION = 5;
 const RECENT_DAYS = 3;
 const MAX_TARGET = 7;
 
@@ -40,7 +40,7 @@ const SEED_COUNTERS = [
 
 // Display order of sections in the menu; unknown sections go last.
 const SECTION_ORDER = [
-  'Legumbres', 'Guisos', 'Pasta', 'Noodles', 'Arroz', 'Proteínas', 'Salsas',
+  'Legumbres', 'Guisos', 'Pasta', 'Noodles', 'Arroz', 'Proteínas', 'Guarniciones', 'Salsas',
   'Verdura y cremas', 'Frío', 'Huevo', 'Precocinado',
 ];
 
@@ -56,15 +56,17 @@ const SEED_DISHES = [
   ['Pasta', 'Pasta', [], true, { pairsWith: 'Salsas' }],
   ['Pasta', 'Ensalada de pasta', []],
   ['Noodles', 'Noodles', [], true, { pairsWith: 'Proteínas' }],
-  ['Arroz', 'Arroz blanco', [], true],
   ['Arroz', 'Arroz salteado', []],
   ['Arroz', 'Paella de pollo y gambas', []],
-  ['Proteínas', 'Salmón', ['pescado']],
-  ['Proteínas', 'Pollo', [], true],
-  ['Proteínas', 'Pavo', [], true],
-  ['Proteínas', 'Ternera', ['roja'], true],
-  ['Proteínas', 'Cerdo', ['roja'], true],
-  ['Proteínas', 'Gambas', [], true],
+  ['Proteínas', 'Salmón', ['pescado'], false, { pairsWith: 'Guarniciones' }],
+  ['Proteínas', 'Pollo', [], true, { pairsWith: 'Guarniciones' }],
+  ['Proteínas', 'Pavo', [], true, { pairsWith: 'Guarniciones' }],
+  ['Proteínas', 'Ternera', ['roja'], true, { pairsWith: 'Guarniciones' }],
+  ['Proteínas', 'Cerdo', ['roja'], true, { pairsWith: 'Guarniciones' }],
+  ['Proteínas', 'Gambas', [], true, { pairsWith: 'Guarniciones' }],
+  ['Guarniciones', 'Patatas', [], true],
+  ['Guarniciones', 'Ensalada', [], true],
+  ['Guarniciones', 'Arroz blanco', [], true],
   ['Salsas', 'Carbonara', ['roja'], false, { pairOnly: true }],
   ['Salsas', 'Boloñesa', ['roja'], false, { pairOnly: true }],
   ['Verdura y cremas', 'Crema de calabacín', ['verdura'], true],
@@ -101,6 +103,10 @@ const V3_PROTEINS = {
 };
 const V3_SAUCES = new Set(['carbonara', 'boloñesa']);
 const V4_ADDED_DISHES = new Set(['Pasta', 'Noodles', 'Arroz blanco', 'Gambas']);
+
+// v4 seed proteins that v5 pairs with a side dish.
+const V4_PROTEINS = new Set(['salmón', 'pollo', 'pavo', 'ternera', 'cerdo', 'gambas']);
+const V5_ADDED_DISHES = new Set(['Patatas', 'Ensalada']);
 
 function uid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -184,6 +190,23 @@ function migrateToV4(raw) {
   return { ...raw, version: 4, dishes };
 }
 
+// Adds the side dishes and pairs the proteins with them. A dish the user moved
+// or already paired keeps those choices, and an existing side is not duplicated.
+function migrateToV5(raw) {
+  const lowName = (d) => (typeof d?.name === 'string' ? d.name.trim().toLowerCase() : '');
+  const dishes = raw.dishes.map((d) => {
+    const low = lowName(d);
+    if (low === 'arroz blanco' && d.section === 'Arroz') return { ...d, section: 'Guarniciones' };
+    if (V4_PROTEINS.has(low) && d.section === 'Proteínas' && !d.pairsWith) return { ...d, pairsWith: 'Guarniciones' };
+    return d;
+  });
+  const present = new Set(dishes.map(lowName));
+  for (const s of SEED_DISHES) {
+    if (V5_ADDED_DISHES.has(s.name) && !present.has(s.name.toLowerCase())) dishes.push(seedDish(s));
+  }
+  return { ...raw, version: 5, dishes };
+}
+
 const clampTarget = (value, fallback) => {
   const n = Number(value);
   return Number.isInteger(n) && n >= 0 && n <= MAX_TARGET ? n : fallback;
@@ -195,7 +218,8 @@ function normalizeState(input) {
     throw new Error('Formato no válido');
   }
   const upgraded = Array.isArray(input.counters) ? input : migrateV1(input);
-  const raw = (Number(upgraded.version) || 1) < 4 ? migrateToV4(upgraded) : upgraded;
+  const atV4 = (Number(upgraded.version) || 1) < 4 ? migrateToV4(upgraded) : upgraded;
+  const raw = Number(atV4.version) < 5 ? migrateToV5(atV4) : atV4;
 
   const seen = new Set();
   const counters = [];
@@ -365,7 +389,8 @@ const randomItem = (list) => list[Math.floor(Math.random() * list.length)];
 /*
  * Picks a random lunch idea to add on `key`, as { dish, pair, key }. A dish that
  * pairs with a section always comes complete, and neither part may be already
- * chosen that day nor break a maximum.
+ * chosen that day nor break a maximum. Side dishes (dishes of a section others
+ * pair with, that do not ask for anything themselves) are never proposed alone.
  * Priority 1: not eaten recently AND adds to a minimum still pending.
  * Priority 2: not eaten recently. Fallback: anything except `excludeKey`.
  */
@@ -374,10 +399,12 @@ function suggestIdea(key, excludeKey) {
   const recent = recentNames(key);
   const chosen = new Set(daySlots(key).map((slot) => slot.dishId));
   const allowed = (d) => !chosen.has(d.id) && !d.counts.some((c) => blocked.has(c));
+  const pairedSections = new Set(state.dishes.map((d) => d.pairsWith));
+  const isSide = (d) => !d.pairsWith && pairedSections.has(d.section);
 
   const ideas = [];
   for (const dish of state.dishes) {
-    if (dish.pairOnly || !allowed(dish)) continue;
+    if (dish.pairOnly || isSide(dish) || !allowed(dish)) continue;
     const options = pairOptions(dish);
     if (!options.length) ideas.push({ dish, pair: null, key: dish.id });
     for (const pair of options.filter(allowed)) ideas.push({ dish, pair, key: `${dish.id}:${pair.id}` });
