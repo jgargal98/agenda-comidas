@@ -11,7 +11,7 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "carta-comidas",
+      "database_name": "db-menu-semanal",
       "database_id": "203fed64-b07c-46ee-91f1-3e40d3121f3c"
     }
   ]

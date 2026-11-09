@@ -76,7 +76,9 @@ export default {
     if (pathname !== '/api/state') return json({ error: 'not_found' }, 404);
 
     // Fail closed: without a configured key the data is never reachable
-    if (!env.SYNC_KEY || !env.DB) return json({ error: 'not_configured' }, 503);
+    // Only binding names are reported, never their values
+    const missing = [!env.SYNC_KEY && 'SYNC_KEY', !env.DB && 'DB'].filter(Boolean);
+    if (missing.length) return json({ error: 'not_configured', missing }, 503);
     const given = (request.headers.get('Authorization') ?? '').replace(/^Bearer /, '');
     if (!given || !(await keyMatches(given, env.SYNC_KEY))) return json({ error: 'unauthorized' }, 401);
 
