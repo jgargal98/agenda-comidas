@@ -4,7 +4,7 @@
  * Storage and data model
  *
  * state = {
- *   version: 6,
+ *   version: 7,
  *   counters: [{ id, label, type: 'min' | 'max', target }],  // per week
  *   dishes:   [{ id, section, name, counts: [counterId] }],
  *   log:      { 'YYYY-MM-DD': { primero: Slot | null, segundo: Slot | null } }
@@ -18,12 +18,12 @@
  * ------------------------------------------------------------------ */
 
 const STORAGE_KEY = 'carta-comidas:v1';
-const STATE_VERSION = 6;
+const STATE_VERSION = 7;
 const RECENT_DAYS = 3;
 const MAX_TARGET = 7;
 
 // Beyond these amounts the Today view stops being readable at a glance.
-const RECOMMENDED = { min: 3, max: 2 };
+const RECOMMENDED = { min: 4, max: 4 };
 
 const COURSES = [
   { key: 'primero', label: 'Primero' },
@@ -35,9 +35,13 @@ const TYPE_LABELS = { min: 'Mínimo', max: 'Máximo' };
 const SEED_COUNTERS = [
   { id: 'legumbres', label: 'Legumbres', type: 'min', target: 2 },
   { id: 'pescado', label: 'Pescado', type: 'min', target: 2 },
+  { id: 'azul', label: 'Pescado azul', type: 'min', target: 1 },
   { id: 'verdura', label: 'Verdura', type: 'min', target: 3 },
   { id: 'roja', label: 'Carne roja', type: 'max', target: 2 },
+  { id: 'procesado', label: 'Procesado', type: 'max', target: 1 },
   { id: 'precocinado', label: 'Precocinado', type: 'max', target: 1 },
+  { id: 'frito', label: 'Frito', type: 'max', target: 1 },
+  { id: 'refinados', label: 'Hidratos refinados', type: 'max', target: 4 },
 ];
 
 // Display order of sections in the menu; unknown sections go last.
@@ -54,16 +58,16 @@ const NEW_SECTION = '__new__';
 const SEED_DISHES = [
   ['Legumbres', 'Lentejas', ['legumbres']],
   ['Legumbres', 'Ensalada de garbanzos', ['legumbres', 'verdura']],
-  ['Guisos', 'Puchero con arroz', []],
-  ['Pasta', 'Pasta', [], true],
-  ['Pasta', 'Carbonara', ['roja']],
+  ['Guisos', 'Puchero con arroz', ['refinados']],
+  ['Pasta', 'Pasta', ['refinados'], true],
+  ['Pasta', 'Carbonara', ['procesado']],
   ['Pasta', 'Boloñesa', ['roja']],
-  ['Pasta', 'Ensalada de pasta', []],
-  ['Noodles', 'Noodles', [], true],
-  ['Arroz', 'Arroz blanco', [], true],
-  ['Arroz', 'Arroz salteado', []],
-  ['Arroz', 'Paella de pollo y gambas', []],
-  ['Carne y pescado', 'Salmón', ['pescado']],
+  ['Pasta', 'Ensalada de pasta', ['refinados']],
+  ['Noodles', 'Noodles', ['refinados'], true],
+  ['Arroz', 'Arroz blanco', ['refinados'], true],
+  ['Arroz', 'Arroz salteado', ['refinados']],
+  ['Arroz', 'Paella de pollo y gambas', ['refinados']],
+  ['Carne y pescado', 'Salmón', ['pescado', 'azul']],
   ['Carne y pescado', 'Pollo', [], true],
   ['Carne y pescado', 'Pavo', [], true],
   ['Carne y pescado', 'Ternera', ['roja'], true],
@@ -79,9 +83,9 @@ const SEED_DISHES = [
   ['Frío', 'Ensalada completa', ['verdura'], true],
   ['Huevo', 'Tortilla', [], true],
   ['Huevo', 'Revuelto de verduras', ['verdura'], true],
-  ['Precocinado', 'Pizza', ['precocinado'], true],
-  ['Precocinado', 'Hamburguesa', ['precocinado'], true],
-  ['Precocinado', 'Empanados', ['precocinado'], true],
+  ['Precocinado', 'Pizza', ['precocinado', 'refinados'], true],
+  ['Precocinado', 'Hamburguesa', ['precocinado', 'refinados'], true],
+  ['Precocinado', 'Empanados', ['precocinado', 'frito'], true],
 ].map(([section, name, counts, isNew = false]) => ({ section, name, counts, isNew }));
 
 // v1 dish replaced by two separate dishes that can now be combined freely.
@@ -109,6 +113,23 @@ const V4_ADDED_DISHES = new Set(['Pasta', 'Noodles', 'Arroz blanco', 'Gambas']);
 // v5 sections that v6 drops, with the section their dishes move to.
 const V5_RENAMED_SECTIONS = { 'Proteínas': 'Carne y pescado', Salsas: 'Pasta', Guarniciones: 'Verdura y cremas' };
 const V6_ADDED_DISHES = new Set(['Patatas', 'Ensalada']);
+
+// Counters added in v7, and the dishes with their original names that add to them.
+const V7_COUNTERS = ['azul', 'procesado', 'frito', 'refinados'];
+const V7_DISH_COUNTERS = {
+  'salmón': ['azul'],
+  'carbonara': ['procesado'],
+  'empanados': ['frito'],
+  'puchero con arroz': ['refinados'],
+  'pasta': ['refinados'],
+  'ensalada de pasta': ['refinados'],
+  'noodles': ['refinados'],
+  'arroz blanco': ['refinados'],
+  'arroz salteado': ['refinados'],
+  'paella de pollo y gambas': ['refinados'],
+  'pizza': ['refinados'],
+  'hamburguesa': ['refinados'],
+};
 
 function uid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -207,6 +228,32 @@ function migrateToV6(raw) {
   return { ...raw, version: 6, dishes };
 }
 
+// Adds the new counters and classifies the dishes. A counter the user already
+// created with the same name is reused instead of duplicated. Carbonara moves
+// from red meat to processed, since only its bacon made it count; history stays.
+function migrateToV7(raw) {
+  const counters = [...raw.counters];
+  const ids = {};
+  for (const id of V7_COUNTERS) {
+    const seed = SEED_COUNTERS.find((c) => c.id === id);
+    const low = seed.label.toLowerCase();
+    const existing = counters.find((c) => c?.id === id || (typeof c?.label === 'string' && c.label.trim().toLowerCase() === low));
+    if (!existing) counters.push({ ...seed });
+    ids[id] = existing?.id ?? id;
+  }
+
+  const dishes = raw.dishes.map((d) => {
+    const low = typeof d?.name === 'string' ? d.name.trim().toLowerCase() : '';
+    const added = V7_DISH_COUNTERS[low];
+    if (!added) return d;
+    const own = Array.isArray(d.counts) ? d.counts : [];
+    const kept = low === 'carbonara' ? own.filter((id) => id !== 'roja') : own;
+    return { ...d, counts: [...new Set([...kept, ...added.map((id) => ids[id])])] };
+  });
+
+  return { ...raw, version: 7, counters, dishes };
+}
+
 const clampTarget = (value, fallback) => {
   const n = Number(value);
   return Number.isInteger(n) && n >= 0 && n <= MAX_TARGET ? n : fallback;
@@ -219,7 +266,8 @@ function normalizeState(input) {
   }
   const upgraded = Array.isArray(input.counters) ? input : migrateV1(input);
   const atV4 = (Number(upgraded.version) || 1) < 4 ? migrateToV4(upgraded) : upgraded;
-  const raw = Number(atV4.version) < 6 ? migrateToV6(atV4) : atV4;
+  const atV6 = Number(atV4.version) < 6 ? migrateToV6(atV4) : atV4;
+  const raw = Number(atV6.version) < 7 ? migrateToV7(atV6) : atV6;
 
   const seen = new Set();
   const counters = [];
@@ -1021,7 +1069,10 @@ function backupDiscarded(data) {
 }
 
 function openConflict(remote) {
-  const describe = (data) => `${Object.keys(data.log ?? {}).length} días con almuerzo, ${data.dishes.length} platos`;
+  const describe = (data) => {
+    const days = Object.keys(data.log ?? {}).length;
+    return `${days} ${days === 1 ? 'día' : 'días'} con almuerzo, ${data.dishes.length} platos`;
+  };
   const when = new Date(remote.updatedAt).toLocaleString('es-ES', { dateStyle: 'short', timeStyle: 'short' });
 
   const choose = async (action) => {
