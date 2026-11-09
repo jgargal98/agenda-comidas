@@ -4,10 +4,10 @@
  * Storage and data model
  *
  * state = {
- *   version: 2,
+ *   version: 3,
  *   counters: [{ id, label, type: 'min' | 'max', target }],  // per week
- *   dishes:   [{ id, course: 'primero' | 'segundo', section, name, counts: [counterId] }],
- *   log:      { 'YYYY-MM-DD': { primero: Slot | null, segundo: Slot | null } }
+ *   dishes:   [{ id, section, name, counts: [counterId] }],
+ *   log:      { 'YYYY-MM-DD': [Slot] }  // any number of dishes, any combination
  * }
  * Slot = { name, counts, dishId | null }
  *
@@ -17,18 +17,12 @@
  * ------------------------------------------------------------------ */
 
 const STORAGE_KEY = 'carta-comidas:v1';
-const PRE_MIGRATION_KEY = 'carta-comidas:v1-backup';
-const STATE_VERSION = 2;
+const STATE_VERSION = 3;
 const RECENT_DAYS = 3;
 const MAX_TARGET = 7;
 
 // Beyond these amounts the Today view stops being readable at a glance.
 const RECOMMENDED = { min: 3, max: 2 };
-
-const COURSES = [
-  { key: 'primero', label: 'Primero', plural: 'Primeros' },
-  { key: 'segundo', label: 'Segundo', plural: 'Segundos' },
-];
 
 const TYPE_LABELS = { min: 'Mínimo', max: 'Máximo' };
 
@@ -46,40 +40,43 @@ const SECTION_ORDER = [
   'Noodles', 'Verdura y cremas', 'Frío', 'Huevo', 'Precocinado',
 ];
 
-// [course, section, name, counts, isNew]. isNew marks dishes that did not exist
-// in v1, the only ones a migration may add without restoring a deleted dish.
+// Value of the section dropdown option that asks for a new section name.
+const NEW_SECTION = '__new__';
+
+// [section, name, counts, isNew]. isNew marks dishes that did not exist in v1,
+// the only ones a migration may add without restoring a deleted dish.
 const SEED_DISHES = [
-  ['primero', 'Legumbres', 'Lentejas', ['legumbres']],
-  ['primero', 'Legumbres', 'Ensalada de garbanzos', ['legumbres', 'verdura']],
-  ['primero', 'Guisos', 'Puchero con arroz', []],
-  ['primero', 'Pasta', 'Carbonara', ['roja']],
-  ['primero', 'Pasta', 'Boloñesa', ['roja']],
-  ['primero', 'Pasta', 'Ensalada de pasta', []],
-  ['primero', 'Arroz', 'Arroz salteado', []],
-  ['primero', 'Arroz', 'Paella de pollo y gambas', []],
-  ['primero', 'Noodles', 'Noodles con pollo', []],
-  ['primero', 'Noodles', 'Noodles con ternera', ['roja']],
-  ['primero', 'Noodles', 'Noodles con cerdo', ['roja']],
-  ['primero', 'Noodles', 'Noodles con gambas', []],
-  ['primero', 'Noodles', 'Noodles con salmón', ['pescado']],
-  ['primero', 'Verdura y cremas', 'Crema de calabacín', ['verdura'], true],
-  ['primero', 'Verdura y cremas', 'Crema de calabaza', ['verdura'], true],
-  ['primero', 'Verdura y cremas', 'Salteado de verduras', ['verdura'], true],
-  ['primero', 'Verdura y cremas', 'Verdura a la plancha', ['verdura'], true],
-  ['primero', 'Frío', 'Ensaladilla rusa', []],
-  ['primero', 'Frío', 'Ensalada completa', ['verdura'], true],
-  ['segundo', 'Pescado', 'Salmón a la plancha', ['pescado']],
-  ['segundo', 'Pescado', 'Salmón sobre arroz', ['pescado']],
-  ['segundo', 'Carne blanca', 'Pollo a la plancha', [], true],
-  ['segundo', 'Carne blanca', 'Pavo a la plancha', [], true],
-  ['segundo', 'Carne roja', 'Ternera a la plancha', ['roja'], true],
-  ['segundo', 'Carne roja', 'Cerdo a la plancha', ['roja'], true],
-  ['segundo', 'Huevo', 'Tortilla', [], true],
-  ['segundo', 'Huevo', 'Revuelto de verduras', ['verdura'], true],
-  ['segundo', 'Precocinado', 'Pizza', ['precocinado'], true],
-  ['segundo', 'Precocinado', 'Hamburguesa', ['precocinado'], true],
-  ['segundo', 'Precocinado', 'Empanados', ['precocinado'], true],
-].map(([course, section, name, counts, isNew = false]) => ({ course, section, name, counts, isNew }));
+  ['Legumbres', 'Lentejas', ['legumbres']],
+  ['Legumbres', 'Ensalada de garbanzos', ['legumbres', 'verdura']],
+  ['Guisos', 'Puchero con arroz', []],
+  ['Pescado', 'Salmón a la plancha', ['pescado']],
+  ['Pescado', 'Salmón sobre arroz', ['pescado']],
+  ['Carne blanca', 'Pollo a la plancha', [], true],
+  ['Carne blanca', 'Pavo a la plancha', [], true],
+  ['Carne roja', 'Ternera a la plancha', ['roja'], true],
+  ['Carne roja', 'Cerdo a la plancha', ['roja'], true],
+  ['Pasta', 'Carbonara', ['roja']],
+  ['Pasta', 'Boloñesa', ['roja']],
+  ['Pasta', 'Ensalada de pasta', []],
+  ['Arroz', 'Arroz salteado', []],
+  ['Arroz', 'Paella de pollo y gambas', []],
+  ['Noodles', 'Noodles con pollo', []],
+  ['Noodles', 'Noodles con ternera', ['roja']],
+  ['Noodles', 'Noodles con cerdo', ['roja']],
+  ['Noodles', 'Noodles con gambas', []],
+  ['Noodles', 'Noodles con salmón', ['pescado']],
+  ['Verdura y cremas', 'Crema de calabacín', ['verdura'], true],
+  ['Verdura y cremas', 'Crema de calabaza', ['verdura'], true],
+  ['Verdura y cremas', 'Salteado de verduras', ['verdura'], true],
+  ['Verdura y cremas', 'Verdura a la plancha', ['verdura'], true],
+  ['Frío', 'Ensaladilla rusa', []],
+  ['Frío', 'Ensalada completa', ['verdura'], true],
+  ['Huevo', 'Tortilla', [], true],
+  ['Huevo', 'Revuelto de verduras', ['verdura'], true],
+  ['Precocinado', 'Pizza', ['precocinado'], true],
+  ['Precocinado', 'Hamburguesa', ['precocinado'], true],
+  ['Precocinado', 'Empanados', ['precocinado'], true],
+].map(([section, name, counts, isNew = false]) => ({ section, name, counts, isNew }));
 
 // v1 dish replaced by two separate dishes that can now be combined freely.
 const V1_SPLIT_DISH = 'crema de calabacín y salmón';
@@ -91,7 +88,7 @@ function uid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
 
-const seedDish = ({ course, section, name, counts }) => ({ id: uid(), course, section, name, counts: [...counts] });
+const seedDish = ({ section, name, counts }) => ({ id: uid(), section, name, counts: [...counts] });
 
 function defaultState() {
   return {
@@ -102,7 +99,7 @@ function defaultState() {
   };
 }
 
-// Turns a v1 state (one dish per day, fixed goals) into the v2 shape.
+// Turns a v1 state (one dish per day, fixed goals) into the current shape.
 function migrateV1(raw) {
   const seeds = new Map(SEED_DISHES.map((s) => [s.name.toLowerCase(), s]));
 
@@ -118,14 +115,12 @@ function migrateV1(raw) {
     if (low === V1_SPLIT_DISH) continue;
     const seed = seeds.get(low);
     if (!seed) {
-      // Dishes created by the user: a main course is the safest guess
-      dishes.push({ ...d, course: 'segundo' });
+      dishes.push(d); // created by the user, nothing to adapt
       continue;
     }
     const own = Array.isArray(d.counts) ? d.counts : [];
     dishes.push({
       ...d,
-      course: seed.course,
       section: d.section === V1_MOVED_DISHES[low] ? seed.section : d.section,
       counts: [...new Set([...own, ...seed.counts])],
     });
@@ -137,9 +132,7 @@ function migrateV1(raw) {
 
   const log = {};
   for (const [key, entry] of Object.entries(raw.log || {})) {
-    if (typeof entry?.name !== 'string') continue;
-    const course = seeds.get(entry.name.trim().toLowerCase())?.course ?? 'segundo';
-    log[key] = { primero: null, segundo: null, [course]: entry };
+    if (typeof entry?.name === 'string') log[key] = [entry];
   }
 
   return { version: STATE_VERSION, counters, dishes, log };
@@ -172,22 +165,20 @@ function normalizeState(input) {
     .filter((d) => d && typeof d.name === 'string' && d.name.trim())
     .map((d) => ({
       id: typeof d.id === 'string' ? d.id : uid(),
-      course: d.course === 'primero' ? 'primero' : 'segundo',
       section: (typeof d.section === 'string' && d.section.trim()) || 'Otros',
       name: d.name.trim(),
       counts: validCounts(d.counts),
     }));
 
-  const validSlot = (slot) => (slot && typeof slot.name === 'string' && slot.name.trim()
-    ? { name: slot.name.trim(), counts: validCounts(slot.counts), dishId: slot.dishId ?? null }
-    : null);
-
   const log = {};
   for (const [key, entry] of Object.entries(raw.log || {})) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(key) || !entry) continue;
-    const primero = validSlot(entry.primero);
-    const segundo = validSlot(entry.segundo);
-    if (primero || segundo) log[key] = { primero, segundo };
+    // v2 stored each day as { primero, segundo }
+    const list = Array.isArray(entry) ? entry : [entry.primero, entry.segundo];
+    const slots = list
+      .filter((slot) => slot && typeof slot.name === 'string' && slot.name.trim())
+      .map((slot) => ({ name: slot.name.trim(), counts: validCounts(slot.counts), dishId: slot.dishId ?? null }));
+    if (slots.length) log[key] = slots;
   }
 
   return { version: STATE_VERSION, counters, dishes, log };
@@ -199,7 +190,8 @@ function loadState() {
     if (stored) {
       const parsed = JSON.parse(stored);
       // Keep an untouched copy in case a migration ever loses something
-      if (!Array.isArray(parsed.counters)) localStorage.setItem(PRE_MIGRATION_KEY, stored);
+      const version = Number(parsed.version) || 1;
+      if (version < STATE_VERSION) localStorage.setItem(`carta-comidas:v${version}-backup`, stored);
       return normalizeState(parsed);
     }
   } catch (err) {
@@ -271,23 +263,18 @@ function orderedCounters() {
   return [...state.counters.filter((c) => c.type === 'min'), ...state.counters.filter((c) => c.type === 'max')];
 }
 
-// Counter ids the lunch of `key` adds to, optionally ignoring one course.
-function dayCounts(key, skipCourse = null) {
-  const ids = new Set();
-  const entry = state.log[key];
-  if (!entry) return ids;
-  for (const { key: course } of COURSES) {
-    if (course !== skipCourse) for (const id of entry[course]?.counts ?? []) ids.add(id);
-  }
-  return ids;
+const daySlots = (key) => state.log[key] ?? [];
+
+// Counter ids the lunch of `key` adds to.
+function dayCounts(key) {
+  return new Set(daySlots(key).flatMap((slot) => slot.counts));
 }
 
-// Lunches of the week of `key` that add to each counter. `skipCourse` leaves
-// out that course on the day `key` only, to evaluate replacing it.
-function weekTotals(key, skipCourse = null) {
+// Lunches of the week of `key` that add to each counter.
+function weekTotals(key) {
   const totals = Object.fromEntries(state.counters.map((c) => [c.id, 0]));
   for (const day of weekDays(key)) {
-    for (const id of dayCounts(day, day === key ? skipCourse : null)) {
+    for (const id of dayCounts(day)) {
       if (id in totals) totals[id] += 1;
     }
   }
@@ -295,13 +282,13 @@ function weekTotals(key, skipCourse = null) {
 }
 
 /*
- * What choosing a dish for `course` on `key` would change this week.
- * A counter the other course already adds to today cannot change: it neither
- * helps a pending minimum nor pushes a maximum further.
+ * What adding one more dish on `key` would change this week.
+ * A counter that lunch already adds to cannot change: it neither helps a
+ * pending minimum nor pushes a maximum further.
  */
-function courseImpact(key, course) {
-  const totals = weekTotals(key, course);
-  const today = dayCounts(key, course);
+function addImpact(key) {
+  const totals = weekTotals(key);
+  const today = dayCounts(key);
   const open = state.counters.filter((c) => !today.has(c.id));
   return {
     pending: new Set(open.filter((c) => c.type === 'min' && totals[c.id] < c.target).map((c) => c.id)),
@@ -313,23 +300,22 @@ function courseImpact(key, course) {
 function recentNames(key) {
   const names = new Set();
   for (let i = 1; i <= RECENT_DAYS; i++) {
-    const entry = state.log[addDays(key, -i)];
-    for (const { key: course } of COURSES) {
-      if (entry?.[course]) names.add(entry[course].name.toLowerCase());
-    }
+    for (const slot of daySlots(addDays(key, -i))) names.add(slot.name.toLowerCase());
   }
   return names;
 }
 
 /*
- * Picks a random dish of `course` for `key`, never one that breaks a maximum.
+ * Picks a random dish to add on `key`: never one already chosen that day nor
+ * one that breaks a maximum.
  * Priority 1: not eaten recently AND adds to a minimum still pending.
  * Priority 2: not eaten recently. Fallback: anything except `excludeId`.
  */
-function suggestDish(key, course, excludeId) {
-  const { pending, blocked } = courseImpact(key, course);
+function suggestDish(key, excludeId) {
+  const { pending, blocked } = addImpact(key);
   const recent = recentNames(key);
-  const pool = state.dishes.filter((d) => d.course === course && d.id !== excludeId && !d.counts.some((c) => blocked.has(c)));
+  const chosen = new Set(daySlots(key).map((slot) => slot.dishId));
+  const pool = state.dishes.filter((d) => d.id !== excludeId && !chosen.has(d.id) && !d.counts.some((c) => blocked.has(c)));
   const fresh = pool.filter((d) => !recent.has(d.name.toLowerCase()));
   const useful = fresh.filter((d) => d.counts.some((c) => pending.has(c)));
 
@@ -338,9 +324,14 @@ function suggestDish(key, course, excludeId) {
   return candidates[Math.floor(Math.random() * candidates.length)];
 }
 
-function setSlot(key, course, slot) {
-  const entry = { primero: null, segundo: null, ...state.log[key], [course]: slot };
-  if (entry.primero || entry.segundo) state.log[key] = entry;
+function addSlot(key, slot) {
+  state.log[key] = [...daySlots(key), slot];
+  save();
+}
+
+function removeSlot(key, index) {
+  const slots = daySlots(key).filter((_, i) => i !== index);
+  if (slots.length) state.log[key] = slots;
   else delete state.log[key];
   save();
 }
@@ -403,13 +394,9 @@ const ui = {
   view: 'hoy',
   day: todayKey(),
   week: weekStart(todayKey()),
-  ideas: { primero: null, segundo: null }, // dishes proposed by "Dame una idea"
-  notices: { primero: '', segundo: '' }, // shown once, on the next render
+  idea: null, // dish currently proposed by "Dame una idea"
+  notice: '', // shown once, on the next render
 };
-
-function clearIdeas() {
-  ui.ideas = { primero: null, segundo: null };
-}
 
 /* ---------- Sheet (bottom panel) ---------- */
 
@@ -469,46 +456,48 @@ function renderProgress(container, key) {
   );
 }
 
-function renderSlot(key, { key: course, label }) {
-  const slot = state.log[key]?.[course] ?? null;
-  const notice = ui.notices[course];
-  ui.notices[course] = '';
-
-  // Choosing the other course may have turned this idea into an excess
-  const { blocked } = courseImpact(key, course);
-  if (ui.ideas[course]?.counts.some((c) => blocked.has(c))) ui.ideas[course] = null;
-  const idea = ui.ideas[course];
+function renderLunch(key) {
+  const slots = daySlots(key);
+  const notice = ui.notice;
+  ui.notice = '';
+  const idea = ui.idea;
 
   const askIdea = (excludeId) => {
-    ui.ideas[course] = suggestDish(key, course, excludeId);
-    if (!ui.ideas[course]) ui.notices[course] = 'No hay más ideas dentro de tus límites.';
+    ui.idea = suggestDish(key, excludeId);
+    if (!ui.idea) ui.notice = 'No hay más ideas dentro de tus límites.';
     renderToday();
   };
 
+  const list = slots.length > 0 && h('ul', { class: 'lunch-list' }, slots.map((slot, i) =>
+    h('li', { class: 'lunch-item' },
+      h('div', {}, h('p', { class: 'slot-name' }, slot.name), tagList(slot.counts)),
+      h('button', {
+        class: 'btn danger',
+        'aria-label': `Quitar ${slot.name}`,
+        onclick: () => { removeSlot(key, i); renderToday(); },
+      }, 'Quitar'))));
+
   if (idea) {
     return h('div', { class: 'card' },
-      h('h2', { class: 'card-title' }, label),
+      h('h2', { class: 'card-title' }, 'Almuerzo'),
+      list,
       h('div', { class: 'slot' },
         h('p', { class: 'idea-label' }, 'Idea'),
         h('p', { class: 'slot-name' }, idea.name),
         tagList(idea.counts)),
       h('div', { class: 'actions' },
-        h('button', { class: 'btn primary', onclick: () => { setSlot(key, course, slotFromDish(idea)); ui.ideas[course] = null; renderToday(); } }, 'Me lo quedo'),
+        h('button', { class: 'btn primary', onclick: () => { addSlot(key, slotFromDish(idea)); ui.idea = null; renderToday(); } }, 'Me lo quedo'),
         h('button', { class: 'btn', onclick: () => askIdea(idea.id) }, 'Otra idea'),
-        h('button', { class: 'btn', onclick: () => { ui.ideas[course] = null; renderToday(); } }, 'Cancelar')));
+        h('button', { class: 'btn', onclick: () => { ui.idea = null; renderToday(); } }, 'Cancelar')));
   }
 
   return h('div', { class: 'card' },
-    h('h2', { class: 'card-title' }, label),
-    h('div', { class: 'slot' },
-      slot
-        ? [h('p', { class: 'slot-name' }, slot.name), tagList(slot.counts)]
-        : h('p', { class: 'slot-empty' }, 'Sin elegir')),
+    h('h2', { class: 'card-title' }, 'Almuerzo'),
+    list || h('p', { class: 'slot-empty' }, 'Sin elegir'),
     h('div', { class: 'actions' },
-      h('button', { class: 'btn primary', onclick: () => openPicker(course, label) }, slot ? 'Cambiar' : 'Elegir de la carta'),
-      h('button', { class: 'btn', onclick: () => askIdea(slot?.dishId) }, 'Dame una idea'),
-      h('button', { class: 'btn', onclick: () => openCustom(course, label) }, 'Otra cosa'),
-      slot && h('button', { class: 'btn danger', onclick: () => { setSlot(key, course, null); renderToday(); } }, 'Quitar')),
+      h('button', { class: 'btn primary', onclick: openPicker }, slots.length ? 'Añadir de la carta' : 'Elegir de la carta'),
+      h('button', { class: 'btn', onclick: () => askIdea() }, 'Dame una idea'),
+      h('button', { class: 'btn', onclick: openCustom }, 'Otra cosa')),
     notice && h('p', { class: 'hint', role: 'status' }, notice));
 }
 
@@ -519,44 +508,45 @@ function renderToday() {
   $('#go-today').hidden = isToday;
 
   renderProgress($('#progress'), key);
-  $('#slots').replaceChildren(...COURSES.map((c) => renderSlot(key, c)));
+  $('#lunch').replaceChildren(renderLunch(key));
 }
 
-function openPicker(course, label) {
+function openPicker() {
   const key = ui.day;
   const recent = recentNames(key);
-  const { blocked } = courseImpact(key, course);
-  const groups = groupBySection(state.dishes.filter((d) => d.course === course));
+  const { blocked } = addImpact(key);
+  const chosen = new Set(daySlots(key).map((slot) => slot.dishId));
+  const groups = groupBySection(state.dishes);
   const content = groups.length
     ? groups.map(([section, list]) => [
         h('h3', { class: 'group-title' }, section),
         h('ul', { class: 'dish-list' }, list.map((d) => {
+          const isChosen = chosen.has(d.id);
           // A warning only: the person planning the menu has the last word
           const notes = [
+            isChosen && 'ya elegido',
             recent.has(d.name.toLowerCase()) && 'reciente',
             d.counts.some((c) => blocked.has(c)) && 'superaría un límite',
           ].filter(Boolean);
           return h('li', {}, h('button', {
             class: 'dish',
-            onclick: () => { setSlot(key, course, slotFromDish(d)); ui.ideas[course] = null; closeSheet(); renderToday(); },
+            disabled: isChosen,
+            onclick: () => { addSlot(key, slotFromDish(d)); ui.idea = null; closeSheet(); renderToday(); },
           },
           h('span', { class: 'dish-name' }, d.name,
             notes.length > 0 && h('span', { class: 'dish-note' }, ` · ${notes.join(' · ')}`)),
           tagList(d.counts)));
         })),
       ])
-    : [h('p', { class: 'hint' }, 'No hay platos de este tipo. Añádelos en la pestaña Carta.')];
-  openSheet(`Elegir ${label.toLowerCase()}`, ...content.flat());
+    : [h('p', { class: 'hint' }, 'La carta está vacía. Añade platos en la pestaña Carta.')];
+  openSheet('Elegir de la carta', ...content.flat());
 }
 
-function openCustom(course, label) {
+function openCustom() {
   const key = ui.day;
-  const stored = state.log[key]?.[course];
-  const current = stored && !stored.dishId ? stored : null;
-  const name = h('input', { type: 'text', maxlength: 80, placeholder: 'Por ejemplo: comida fuera', value: current?.name ?? '' });
+  const name = h('input', { type: 'text', maxlength: 80, placeholder: 'Por ejemplo: comida fuera' });
   const checks = orderedCounters().map((c) => {
     const input = h('input', { type: 'checkbox', value: c.id });
-    input.checked = Boolean(current?.counts.includes(c.id));
     return [input, h('label', { class: 'check' }, input, `Cuenta como ${c.label.toLowerCase()}`)];
   });
   const form = h('form', {
@@ -564,8 +554,8 @@ function openCustom(course, label) {
       e.preventDefault();
       const text = name.value.trim();
       if (!text) { name.focus(); return; }
-      setSlot(key, course, { name: text, counts: checks.filter(([i]) => i.checked).map(([i]) => i.value), dishId: null });
-      ui.ideas[course] = null;
+      addSlot(key, { name: text, counts: checks.filter(([i]) => i.checked).map(([i]) => i.value), dishId: null });
+      ui.idea = null;
       closeSheet();
       renderToday();
     },
@@ -573,28 +563,23 @@ function openCustom(course, label) {
   h('label', { class: 'field' }, h('span', {}, 'Qué has comido'), name),
   checks.map(([, check]) => check),
   h('button', { class: 'btn primary block', type: 'submit' }, 'Guardar'));
-  openSheet(`Otro ${label.toLowerCase()}`, form);
+  openSheet('Otra cosa', form);
   name.focus();
 }
 
 /* ---------- Menu view ---------- */
 
 function renderMenu() {
+  const groups = groupBySection(state.dishes);
   $('#menu-list').replaceChildren(
-    ...COURSES.flatMap(({ key, plural }) => {
-      const groups = groupBySection(state.dishes.filter((d) => d.course === key));
-      return [
-        h('h2', { class: 'course-title' }, plural),
-        ...(groups.length
-          ? groups.flatMap(([section, list]) => [
-              h('h3', { class: 'group-title' }, section),
-              h('ul', { class: 'dish-list' }, list.map((d) =>
-                h('li', {}, h('button', { class: 'dish', onclick: () => openDishForm(d) },
-                  h('span', { class: 'dish-name' }, d.name), tagList(d.counts))))),
-            ])
-          : [h('p', { class: 'hint' }, 'No hay platos todavía.')]),
-      ];
-    }),
+    ...(groups.length
+      ? groups.flatMap(([section, list]) => [
+          h('h3', { class: 'group-title' }, section),
+          h('ul', { class: 'dish-list' }, list.map((d) =>
+            h('li', {}, h('button', { class: 'dish', onclick: () => openDishForm(d) },
+              h('span', { class: 'dish-name' }, d.name), tagList(d.counts))))),
+        ])
+      : [h('p', { class: 'hint' }, 'No hay platos todavía.')]),
   );
 }
 
@@ -629,11 +614,23 @@ function deleteButton(label, armedLabel, onConfirm) {
 function openDishForm(dish) {
   const isNew = !dish;
   const name = h('input', { type: 'text', maxlength: 80, required: true, value: dish?.name ?? '' });
-  const course = radioGroup('Tipo', 'dish-course', COURSES.map((c) => [c.key, c.label]), dish?.course ?? 'primero');
-  // Datalist offers existing sections but allows creating new ones
-  const sections = [...new Set(state.dishes.map((d) => d.section))];
-  const datalist = h('datalist', { id: 'section-options' }, sections.map((s) => h('option', { value: s })));
-  const section = h('input', { type: 'text', maxlength: 40, list: 'section-options', required: true, value: dish?.section ?? '' });
+  // Known sections first, then the user's own, plus a way to create a new one
+  const own = state.dishes.map((d) => d.section).filter((s) => !SECTION_ORDER.includes(s)).sort((a, b) => a.localeCompare(b, 'es'));
+  const section = h('select', {
+    required: true,
+    onchange: () => {
+      const isNewSection = section.value === NEW_SECTION;
+      newSectionField.hidden = !isNewSection;
+      newSection.required = isNewSection;
+      if (isNewSection) newSection.focus();
+    },
+  },
+  h('option', { value: '' }, 'Elige una sección'),
+  [...new Set([...SECTION_ORDER, ...own])].map((s) => h('option', { value: s }, s)),
+  h('option', { value: NEW_SECTION }, 'Otra sección…'));
+  section.value = dish?.section ?? '';
+  const newSection = h('input', { type: 'text', maxlength: 40 });
+  const newSectionField = h('label', { class: 'field', hidden: true }, h('span', {}, 'Nombre de la sección'), newSection);
   const counters = orderedCounters();
   const checks = counters.map((c) => {
     const input = h('input', { type: 'checkbox', value: c.id });
@@ -643,7 +640,7 @@ function openDishForm(dish) {
 
   const del = !isNew && deleteButton('Eliminar plato', 'Toca otra vez para eliminar', () => {
     state.dishes = state.dishes.filter((d) => d.id !== dish.id);
-    clearIdeas();
+    ui.idea = null;
     save();
     closeSheet();
     render();
@@ -654,22 +651,21 @@ function openDishForm(dish) {
       e.preventDefault();
       const data = {
         name: name.value.trim(),
-        course: course.value(),
-        section: section.value.trim(),
+        section: (section.value === NEW_SECTION ? newSection.value : section.value).trim(),
         counts: checks.filter((i) => i.checked).map((i) => i.value),
       };
       if (!data.name || !data.section) return;
       if (isNew) state.dishes.push({ id: uid(), ...data });
       else Object.assign(dish, data);
-      clearIdeas();
+      ui.idea = null;
       save();
       closeSheet();
       render();
     },
   },
   h('label', { class: 'field' }, h('span', {}, 'Nombre'), name),
-  course.element,
-  h('label', { class: 'field' }, h('span', {}, 'Sección'), section, datalist),
+  h('label', { class: 'field' }, h('span', {}, 'Sección'), section),
+  newSectionField,
   counters.length > 0 && h('p', { class: 'hint' }, 'Suma a'),
   counters.map((c, i) => h('label', { class: 'check' }, checks[i], c.label)),
   h('button', { class: 'btn primary block', type: 'submit' }, 'Guardar'),
@@ -692,11 +688,10 @@ function renderWeek() {
   const today = todayKey();
   $('#week-list').replaceChildren(
     ...days.map((key) => {
-      const entry = state.log[key];
-      const names = COURSES.map((c) => entry?.[c.key]?.name).filter(Boolean);
+      const names = daySlots(key).map((slot) => slot.name);
       return h('li', {}, h('button', {
         class: 'week-day' + (key === today ? ' today' : ''),
-        onclick: () => { ui.day = key; clearIdeas(); showView('hoy'); },
+        onclick: () => { ui.day = key; ui.idea = null; showView('hoy'); },
       },
       h('span', { class: 'week-dow' }, `${cap(fmtDow.format(fromKey(key)))} ${fromKey(key).getDate()}`),
       h('span', { class: 'week-meal' + (names.length ? '' : ' empty') },
@@ -757,9 +752,7 @@ function openCounterForm(counter) {
     const strip = (holder) => { holder.counts = holder.counts.filter((id) => id !== counter.id); };
     state.counters = state.counters.filter((c) => c !== counter);
     state.dishes.forEach(strip);
-    for (const entry of Object.values(state.log)) {
-      for (const { key } of COURSES) if (entry[key]) strip(entry[key]);
-    }
+    Object.values(state.log).flat().forEach(strip);
     save();
     closeSheet();
     render();
@@ -809,7 +802,7 @@ $('#import-file').addEventListener('change', async (e) => {
   if (!file) return;
   try {
     state = normalizeState(JSON.parse(await file.text()));
-    clearIdeas();
+    ui.idea = null;
     save();
     render();
     $('#backup-msg').textContent = 'Copia importada.';
@@ -858,9 +851,9 @@ function render() {
 for (const tab of document.querySelectorAll('.tab')) {
   tab.addEventListener('click', () => { closeSheet(); showView(tab.dataset.view); });
 }
-$('#prev-day').addEventListener('click', () => { ui.day = addDays(ui.day, -1); clearIdeas(); renderToday(); });
-$('#next-day').addEventListener('click', () => { ui.day = addDays(ui.day, 1); clearIdeas(); renderToday(); });
-$('#go-today').addEventListener('click', () => { ui.day = todayKey(); clearIdeas(); renderToday(); });
+$('#prev-day').addEventListener('click', () => { ui.day = addDays(ui.day, -1); ui.idea = null; renderToday(); });
+$('#next-day').addEventListener('click', () => { ui.day = addDays(ui.day, 1); ui.idea = null; renderToday(); });
+$('#go-today').addEventListener('click', () => { ui.day = todayKey(); ui.idea = null; renderToday(); });
 
 // When the app is reopened on a new day, jump to the real today
 let lastSeenToday = todayKey();

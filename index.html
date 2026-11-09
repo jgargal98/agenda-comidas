@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#2f6b4f" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#16241d" media="(prefers-color-scheme: dark)">
-  <meta name="description" content="Carta de almuerzos con primeros, segundos y contadores semanales">
+  <meta name="description" content="Carta de almuerzos con contadores semanales">
   <title>Carta de comidas</title>
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon-192.png" type="image/png">
@@ -18,7 +18,7 @@
   </header>
 
   <main>
-    <!-- Today: first and second course of the selected day and weekly progress -->
+    <!-- Today: the dishes of the selected day and weekly progress -->
     <section id="view-hoy" class="view" aria-labelledby="title">
       <div class="daynav">
         <button class="icon-btn" id="prev-day" aria-label="Día anterior">&#8249;</button>
@@ -34,11 +34,10 @@
         <div id="progress" class="progress"></div>
       </div>
 
-      <!-- One card per course; either can stay empty -->
-      <div id="slots"></div>
+      <div id="lunch"></div>
     </section>
 
-    <!-- Menu: dish catalogue grouped by course and section -->
+    <!-- Menu: dish catalogue grouped by section -->
     <section id="view-carta" class="view" hidden>
       <button class="btn primary block" id="add-dish">Añadir plato</button>
       <div id="menu-list"></div>
